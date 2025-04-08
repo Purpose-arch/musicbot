@@ -179,6 +179,9 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
 # Асинхронная функция для скачивания трека с повторными попытками
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
+    # Создаем и запускаем задачу анимации
+    animation_task = asyncio.create_task(animate_loading_dots(status_message, track_data["title"], track_data["artist"]))
+    
     try:
         title = track_data["title"]
         artist = track_data["artist"]
@@ -195,7 +198,8 @@ async def download_track(user_id, track_data, callback_message, status_message):
         while retry_count < MAX_RETRIES and not download_success:
             try:
                 if retry_count > 0:
-                    await status_message.edit_text(f"⏳ скачиваю трек: {title} - {artist}... (попытка {retry_count+1})")
+                    # Не обновляем сообщение здесь, так как это делает анимация
+                    pass
                 
                 response = await asyncio.to_thread(
                     lambda: requests.get(url, timeout=60)
@@ -216,6 +220,9 @@ async def download_track(user_id, track_data, callback_message, status_message):
             lambda: set_mp3_metadata(temp_path, title, artist)
         )
         
+        # Отменяем задачу анимации
+        animation_task.cancel()
+        
         # Отправляем аудио в чат (без caption)
         audio = FSInputFile(temp_path, filename=f"{artist} - {title}.mp3")
         await callback_message.answer_audio(
@@ -228,6 +235,9 @@ async def download_track(user_id, track_data, callback_message, status_message):
         await status_message.delete()
         
     except Exception as e:
+        # Отменяем задачу анимации
+        animation_task.cancel()
+        
         # В случае ошибки обновляем сообщение о статусе
         await status_message.edit_text(f"❌ не получилось скачать трек: {str(e)}")
     finally:
@@ -242,11 +252,29 @@ async def download_track(user_id, track_data, callback_message, status_message):
         if user_id in download_tasks and id(asyncio.current_task()) in download_tasks[user_id]:
             del download_tasks[user_id][id(asyncio.current_task())]
 
+# Функция для анимации точек загрузки
+async def animate_loading_dots(message, title, artist, interval=0.5):
+    # Создаем анимацию с движущейся точкой ●
+    animations = ["● \u2009 \u2009 \u2009", " \u2009● \u2009 \u2009", " \u2009 \u2009● \u2009", " \u2009 \u2009 \u2009●", " \u2009 \u2009● \u2009", " \u2009● \u2009 \u2009"]
+    idx = 0
+    
+    try:
+        while True:
+            await message.edit_text(f"⏳ скачиваю трек: {title} - {artist} {animations[idx]}")
+            idx = (idx + 1) % len(animations)
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        # Когда задача отменена, просто выходим из функции
+        pass
+    except Exception as e:
+        print(f"ошибка в анимации: {str(e)}")
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "привет! я просто бот для поиска музыкт\n"
-        "напиши ключевые слова или хз что еще"
+        "🤠 привет\n"
+        "это чистый не нагруженный бот для поиска песен\n"
+        "ты уже знаещь как искать поэтому не буду говорить лишнего"
     )
 
 @dp.message(Command("downloads"))
@@ -263,7 +291,7 @@ async def cmd_downloads(message: types.Message):
 @dp.message()
 async def search_music(message: types.Message):
     try:
-        loading_msg = await message.answer("🔍 ищу треки...")
+        loading_msg = await message.answer("🔍 ищу песни...")
         
         query = message.text
         
@@ -275,7 +303,7 @@ async def search_music(message: types.Message):
             while retry_count < MAX_RETRIES and tracks is None:
                 try:
                     if retry_count > 0:
-                        await loading_msg.edit_text(f"🔍 ищу треки... (попытка {retry_count+1})")
+                        await loading_msg.edit_text(f"🔍 ищу песни... (попытка {retry_count+1})")
                     
                     tracks = service.search_songs_by_text(query, count=MAX_TRACKS)
                 except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
@@ -291,7 +319,7 @@ async def search_music(message: types.Message):
             # Проверяем, является ли ошибка SSL handshake timeout
             error_str = str(e)
             if "_ssl.c:989: The handshake operation timed out" in error_str:
-                await loading_msg.edit_text("такое иногда случается\nпопробуй еще раз пожалуста")
+                await loading_msg.edit_text("🚬 чото ошибка\nтакое иногда случается\nпопробуй еще раз пожалуста")
             else:
                 await loading_msg.edit_text(f"❌ ошибка поиска: {error_str}")
             return
@@ -379,8 +407,8 @@ async def download_track_by_data(callback: types.CallbackQuery):
             await callback.message.answer("❌ информация о треке устарела, сделай новый поиск")
             return
         
-        # Отправляем сообщение о начале загрузки
-        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}...")
+        # Отправляем начальное сообщение о загрузке
+        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}")
         
         # Создаем асинхронную задачу для скачивания трека
         task = asyncio.create_task(
@@ -434,8 +462,8 @@ async def download_track_by_index(callback: types.CallbackQuery):
             "search_id": search_id
         }
         
-        # Отправляем сообщение о начале загрузки
-        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}...")
+        # Отправляем начальное сообщение о загрузке
+        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}")
         
         # Создаем асинхронную задачу для скачивания трека
         task = asyncio.create_task(
