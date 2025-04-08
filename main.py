@@ -24,28 +24,8 @@ load_dotenv()
 bot = Bot(token=os.getenv('BOT_TOKEN'))
 dp = Dispatcher()
 
-# Настройки прокси (явные, вместо переменных окружения)
-PROXY_HOST = "171.247.184.62"
-PROXY_PORT = "8080"
-PROXY_TYPE = "https"  # Используем HTTPS прокси
-
 # Увеличиваем время ожидания для SSL-соединений
 session = requests.Session()
-
-# Настраиваем прокси
-if PROXY_HOST and PROXY_PORT:
-    proxy_url = f"{PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}"
-    proxies = {
-        'http': proxy_url,
-        'https': proxy_url
-    }
-    session.proxies = proxies
-    print(f"Прокси настроен: {PROXY_TYPE}://{PROXY_HOST}:{PROXY_PORT}")
-
-# Настраиваем User-Agent более похожий на браузер
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-session.headers.update({"User-Agent": USER_AGENT})
-
 session.request = lambda method, url, **kwargs: requests.Session.request(
     session, method, url, timeout=60, **kwargs  # Увеличил таймаут с 30 до 60 секунд
 )
@@ -78,7 +58,8 @@ def init_service_with_retry():
     try:
         vk_token = os.getenv('VK_TOKEN')
         if vk_token:
-            service = Service(USER_AGENT, vk_token)
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+            service = Service(user_agent, vk_token)
             service.session = session
             return service
     except Exception as e:
@@ -93,7 +74,8 @@ try:
 except Exception as e:
     vk_token = os.getenv('VK_TOKEN')
     if vk_token:
-        service = Service(USER_AGENT, vk_token)
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+        service = Service(user_agent, vk_token)
         service.session = session
     else:
         raise Exception("токен vk не найден. сначала запусти get_token.py для получения токена.")
@@ -345,7 +327,7 @@ async def search_music(message: types.Message):
         if not tracks:
             await loading_msg.edit_text("😔 ничего не нашлось, попробуй другой запрос")
             return
-        
+            
         # Создаем уникальный идентификатор для этого поиска
         search_id = str(uuid.uuid4())
         
