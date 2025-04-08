@@ -1,8 +1,9 @@
 discord.py>=2.3.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-aiogram>=3.18.0
+aiogram>=3.0.0
 vkpymusic>=1.0.0
 mutagen>=1.45.0
 httpx>=0.24.0
 aiohttp>=3.8.0
+PySocks>=1.7.1
