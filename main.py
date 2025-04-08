@@ -70,15 +70,20 @@ def init_service_with_retry():
 
 # Инициализация сервиса с повторными попытками
 try:
-    service = init_service_with_retry()
-except Exception as e:
+    # Сначала пробуем использовать токен из переменной окружения
     vk_token = os.getenv('VK_TOKEN')
     if vk_token:
+        print("Используем VK токен из переменной окружения")
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
         service = Service(user_agent, vk_token)
         service.session = session
     else:
-        raise Exception("токен vk не найден. сначала запусти get_token.py для получения токена.")
+        # Если токена нет в переменных окружения, пробуем через конфиг файл
+        print("Токен не найден в переменных окружения, пробуем через конфиг")
+        service = init_service_with_retry()
+except Exception as e:
+    print(f"Ошибка при инициализации сервиса: {str(e)}")
+    raise Exception("токен vk не найден. сначала запусти get_token.py для получения токена или установи переменную окружения VK_TOKEN.")
 
 # Функция для установки ID3 тегов (метаданных) MP3 файла
 def set_mp3_metadata(file_path, title, artist):
