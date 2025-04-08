@@ -74,9 +74,21 @@ try:
     vk_token = os.getenv('VK_TOKEN')
     if vk_token:
         print("Используем VK токен из переменной окружения")
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         service = Service(user_agent, vk_token)
         service.session = session
+        
+        # Устанавливаем дополнительные заголовки для обхода ограничений
+        service.session.headers.update({
+            'User-Agent': user_agent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://vk.com/',
+            'Origin': 'https://vk.com',
+            'Sec-Ch-Ua': '"Chromium";v="125", "Google Chrome";v="125", "Not.A/Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"'
+        })
     else:
         # Если токена нет в переменных окружения, пробуем через конфиг файл
         print("Токен не найден в переменных окружения, пробуем через конфиг")
@@ -206,12 +218,36 @@ async def download_track(user_id, track_data, callback_message, status_message):
                     # Не обновляем сообщение здесь, так как это делает анимация
                     pass
                 
+                # Добавляем специальные заголовки для скачивания
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                    'Referer': 'https://vk.com/',
+                    'Origin': 'https://vk.com',
+                    'Accept': '*/*',
+                    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
+                }
+                
                 response = await asyncio.to_thread(
-                    lambda: requests.get(url, timeout=60)
+                    lambda: requests.get(url, headers=headers, timeout=60)
                 )
+                
+                # Проверка, что ответ не является ошибкой или перенаправлением
+                if response.status_code != 200:
+                    raise Exception(f"Не удалось скачать трек: код ответа {response.status_code}")
+                    
+                # Проверка контента ответа
+                content_type = response.headers.get('Content-Type', '')
+                if 'audio' not in content_type and 'application/octet-stream' not in content_type:
+                    if len(response.content) < 10000:  # Если ответ слишком маленький, возможно это сообщение об ошибке
+                        raise Exception("Аудио недоступно. Возможно, трек доступен только через вк")
                 
                 with open(temp_path, 'wb') as f:
                     f.write(response.content)
+                
+                # Проверка, что файл действительно MP3
+                file_size = os.path.getsize(temp_path)
+                if file_size < 10000:  # Если файл слишком маленький
+                    raise Exception("Скачанный файл слишком мал и, скорее всего, не является аудиозаписью")
                 
                 download_success = True
             except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
@@ -243,8 +279,13 @@ async def download_track(user_id, track_data, callback_message, status_message):
         # Отменяем задачу анимации
         animation_task.cancel()
         
-        # В случае ошибки обновляем сообщение о статусе
-        await status_message.edit_text(f"❌ не получилось скачать трек: {str(e)}")
+        # Проверяем текст ошибки на наличие специфичных ошибок VK
+        error_str = str(e)
+        if "аудио недоступно" in error_str.lower() or "слишком мал" in error_str.lower():
+            await status_message.edit_text(f"❌ Этот трек недоступен для скачивания через бота.\nДоступно только на сайте vk.com и в официальных приложениях.")
+        else:
+            # В случае обычной ошибки обновляем сообщение о статусе
+            await status_message.edit_text(f"❌ не получилось скачать трек: {error_str}")
     finally:
         # Удаляем временный файл
         if temp_path:
@@ -296,7 +337,7 @@ async def cmd_downloads(message: types.Message):
 @dp.message()
 async def search_music(message: types.Message):
     try:
-        loading_msg = await message.answer("🔍 ищу песни...")
+        loading_msg = await message.answer("🔍 ищу треки...")
         
         query = message.text
         
@@ -308,7 +349,7 @@ async def search_music(message: types.Message):
             while retry_count < MAX_RETRIES and tracks is None:
                 try:
                     if retry_count > 0:
-                        await loading_msg.edit_text(f"🔍 ищу песни... (попытка {retry_count+1})")
+                        await loading_msg.edit_text(f"🔍 ищу треки... (попытка {retry_count+1})")
                     
                     tracks = service.search_songs_by_text(query, count=MAX_TRACKS)
                 except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
@@ -324,7 +365,7 @@ async def search_music(message: types.Message):
             # Проверяем, является ли ошибка SSL handshake timeout
             error_str = str(e)
             if "_ssl.c:989: The handshake operation timed out" in error_str:
-                await loading_msg.edit_text("🚬 чото ошибка\nтакое иногда случается\nпопробуй еще раз пожалуста")
+                await loading_msg.edit_text("такое иногда случается\nпопробуй еще раз пожалуста")
             else:
                 await loading_msg.edit_text(f"❌ ошибка поиска: {error_str}")
             return
@@ -333,21 +374,28 @@ async def search_music(message: types.Message):
             await loading_msg.edit_text("😔 ничего не нашлось, попробуй другой запрос")
             return
             
+        # Фильтруем треки, проверяя наличие url
+        valid_tracks = [track for track in tracks if hasattr(track, 'url') and track.url]
+        
+        if not valid_tracks:
+            await loading_msg.edit_text("😔 нашлись треки, но они недоступны для скачивания.\nПопробуй другой запрос")
+            return
+            
         # Создаем уникальный идентификатор для этого поиска
         search_id = str(uuid.uuid4())
         
         # Сохраняем результаты поиска с уникальным ID
         search_results[search_id] = {
-            "tracks": tracks,
+            "tracks": valid_tracks,
             "query": query,
             "user_id": message.from_user.id
         }
         
         # Получаем клавиатуру с треками первой страницы
-        keyboard = create_tracks_keyboard(tracks, page=0, search_id=search_id)
+        keyboard = create_tracks_keyboard(valid_tracks, page=0, search_id=search_id)
         
         # Формируем заголовок с информацией о количестве найденных треков
-        response = f"🎵 нашлось треков: {len(tracks)}"
+        response = f"🎵 нашлось треков: {len(valid_tracks)}"
         
         await loading_msg.edit_text(response, reply_markup=keyboard)
         
