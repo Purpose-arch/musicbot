@@ -216,7 +216,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': base_temp_path + '.%(ext)s',
+            'outtmpl': base_temp_path + '.mp3',
             'quiet': True,
             'no_warnings': True,
             'prefer_ffmpeg': True,
@@ -235,18 +235,23 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 # Затем скачиваем
                 ydl.download([url])
                 
-                # Ищем скачанный файл с любым расширением
-                found_file = None
-                for ext in ['.mp3', '.m4a', '.webm', '.mp4']:
-                    temp_path = f"{base_temp_path}{ext}"
-                    if os.path.exists(temp_path):
-                        found_file = temp_path
-                        break
+                # Explicitly define the expected mp3 path
+                expected_mp3_path = base_temp_path + '.mp3'
                 
-                if not found_file:
-                    raise Exception("Файл не был создан после скачивания")
+                # Check if the expected mp3 file exists
+                if not os.path.exists(expected_mp3_path):
+                    # Check for other possible extensions only as a fallback for debugging/errors
+                    found_file = None
+                    other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac'] # Common audio formats
+                    for ext in other_extensions:
+                        potential_path = f"{base_temp_path}{ext}"
+                        if os.path.exists(potential_path):
+                            print(f"Warning: MP3 post-processing might have failed. Found {potential_path} instead of {expected_mp3_path}")
+                            # Optionally, you could try to process this file, but for now, let's treat it as an error.
+                            break 
+                    raise Exception(f"Файл {expected_mp3_path} не был создан после скачивания и конвертации.")
                 
-                temp_path = found_file
+                temp_path = expected_mp3_path # Use the expected mp3 path
                 
                 # Проверяем размер файла
                 if os.path.getsize(temp_path) == 0:
