@@ -187,8 +187,19 @@ async def process_download_queue(user_id):
         )
         download_tasks[user_id][track_data["url"]] = task
 
+def _blocking_download_and_convert(url, download_opts):
+    """Helper function to run blocking yt-dlp download/conversion."""
+    with yt_dlp.YoutubeDL(download_opts) as ydl:
+        # Check info first (optional, but good practice)
+        info = ydl.extract_info(url, download=False)
+        if not info:
+            raise Exception("Не удалось получить информацию о видео (в executor)")
+        # Perform the download and conversion
+        ydl.download([url])
+
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
+    loop = asyncio.get_running_loop()
     
     try:
         title = track_data["title"]
@@ -225,69 +236,69 @@ async def download_track(user_id, track_data, callback_message, status_message):
             'extract_flat': False,
         }
         
-        with yt_dlp.YoutubeDL(download_opts) as ydl:
-            try:
-                # Сначала получаем информацию о видео
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise Exception("Не удалось получить информацию о видео")
+        try:
+            # Run the blocking download/conversion in a separate thread
+            await loop.run_in_executor(
+                None,  # Use default ThreadPoolExecutor
+                _blocking_download_and_convert,
+                url,
+                download_opts
+            )
+            
+            # Explicitly define the expected mp3 path
+            expected_mp3_path = base_temp_path + '.mp3'
+            
+            # Check if the expected mp3 file exists
+            if not os.path.exists(expected_mp3_path):
+                # Check for other possible extensions only as a fallback for debugging/errors
+                found_file = None
+                other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac'] # Common audio formats
+                for ext in other_extensions:
+                    potential_path = f"{base_temp_path}{ext}"
+                    if os.path.exists(potential_path):
+                        print(f"Warning: MP3 post-processing might have failed. Found {potential_path} instead of {expected_mp3_path}")
+                        # Optionally, you could try to process this file, but for now, let's treat it as an error.
+                        break 
+                raise Exception(f"Файл {expected_mp3_path} не был создан после скачивания и конвертации.")
+            
+            temp_path = expected_mp3_path # Use the expected mp3 path
+            
+            # Проверяем размер файла
+            if os.path.getsize(temp_path) == 0:
+                raise Exception("Скачанный файл пуст")
+            
+            # Устанавливаем метаданные
+            if set_mp3_metadata(temp_path, title, artist):
+                # Удаляем сообщение о загрузке
+                await bot.delete_message(
+                    chat_id=callback_message.chat.id,
+                    message_id=status_message.message_id
+                )
                 
-                # Затем скачиваем
-                ydl.download([url])
+                # Отправляем сообщение о отправке
+                sending_message = await callback_message.answer("📤 Отправляю трек...")
                 
-                # Explicitly define the expected mp3 path
-                expected_mp3_path = base_temp_path + '.mp3'
+                await bot.send_audio(
+                    chat_id=callback_message.chat.id,
+                    audio=FSInputFile(temp_path),
+                    title=title,
+                    performer=artist
+                )
                 
-                # Check if the expected mp3 file exists
-                if not os.path.exists(expected_mp3_path):
-                    # Check for other possible extensions only as a fallback for debugging/errors
-                    found_file = None
-                    other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac'] # Common audio formats
-                    for ext in other_extensions:
-                        potential_path = f"{base_temp_path}{ext}"
-                        if os.path.exists(potential_path):
-                            print(f"Warning: MP3 post-processing might have failed. Found {potential_path} instead of {expected_mp3_path}")
-                            # Optionally, you could try to process this file, but for now, let's treat it as an error.
-                            break 
-                    raise Exception(f"Файл {expected_mp3_path} не был создан после скачивания и конвертации.")
-                
-                temp_path = expected_mp3_path # Use the expected mp3 path
-                
-                # Проверяем размер файла
-                if os.path.getsize(temp_path) == 0:
-                    raise Exception("Скачанный файл пуст")
-                
-                # Устанавливаем метаданные
-                if set_mp3_metadata(temp_path, title, artist):
-                    # Удаляем сообщение о загрузке
-                    await bot.delete_message(
-                        chat_id=callback_message.chat.id,
-                        message_id=status_message.message_id
-                    )
-                    
-                    # Отправляем сообщение о отправке
-                    sending_message = await callback_message.answer("📤 Отправляю трек...")
-                    
-                    await bot.send_audio(
-                        chat_id=callback_message.chat.id,
-                        audio=FSInputFile(temp_path),
-                        title=title,
-                        performer=artist
-                    )
-                    
-                    # Удаляем сообщение о отправке
-                    await bot.delete_message(
-                        chat_id=callback_message.chat.id,
-                        message_id=sending_message.message_id
-                    )
-                else:
-                    await bot.edit_message_text(
-                        chat_id=callback_message.chat.id,
-                        message_id=status_message.message_id,
-                        text=f"❌ Ошибка при обработке метаданных трека: {title} - {artist}"
-                    )
-            except Exception as e:
-                raise Exception(f"Ошибка при скачивании: {str(e)}")
+                # Удаляем сообщение о отправке
+                await bot.delete_message(
+                    chat_id=callback_message.chat.id,
+                    message_id=sending_message.message_id
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id=callback_message.chat.id,
+                    message_id=status_message.message_id,
+                    text=f"❌ Ошибка при обработке трека: {str(e)}"
+                )
+        except Exception as e:
+            # Catch errors from executor or file checks
+            raise Exception(f"Ошибка при скачивании/конвертации: {str(e)}")
     
     except Exception as e:
         await bot.edit_message_text(
