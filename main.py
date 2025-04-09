@@ -4,6 +4,8 @@ import tempfile
 import json
 import base64
 import math
+import sqlite3
+import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
@@ -14,9 +16,6 @@ from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-
-# Импортируем функции из database.py
-import database as db
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -31,6 +30,9 @@ MAX_TRACKS = 150
 MAX_RETRIES = 3
 MIN_SONG_DURATION = 45  # Минимальная длительность трека в секундах
 MAX_SONG_DURATION = 720 # Максимальная длительность трека в секундах (12 минут)
+ADMIN_ID = 5345341969 # Твой ID для доступа к админке
+LOGS_PER_PAGE = 15    # Количество записей лога на странице админки
+DB_NAME = 'bot_log.db'  # Имя файла базы данных
 
 # Хранилища
 download_tasks = defaultdict(dict)
@@ -160,25 +162,6 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
                 callback_data=callback_data
             )
         ])
-        
-        # Кнопка добавления в плейлист
-        add_to_playlist_data = {
-            "a": "add_ask", # action: ask which playlist
-            "url": track['url'],
-            # Передаем основные данные трека для добавления в БД
-            "t": track['title'][:30], # Ограничим длину для callback data
-            "art": track['channel'][:20],
-            "dur": track.get('duration', 0),
-            "sid": search_id # search_id нужен для получения полных данных если callback data урезана
-        }
-        add_callback_data = f"addpl_{base64.b64encode(json.dumps(add_to_playlist_data).encode('utf-8')).decode('utf-8')}"
-        # Проверяем длину callback_data (макс 64 байта)
-        if len(add_callback_data.encode('utf-8')) > 64:
-             # Если слишком длинно, используем урезанный вариант с индексом и search_id
-             # (Предполагаем, что dl_ callback тоже может быть длинным, поэтому используем другой префикс)
-             add_callback_data = f"addplidx_{i}_{search_id}" 
-             
-        buttons[-1].append(InlineKeyboardButton(text="➕ в плейлист", callback_data=add_callback_data))
     
     if total_pages > 1:
         nav_buttons = []
@@ -378,6 +361,102 @@ def set_mp3_metadata(file_path, title, artist):
         print(f"ошибка при установке метаданных: {e}")
         return False
 
+# --- Database Functions ---
+
+def init_db():
+    """инициализирует бд и создает таблицу, если её нет."""
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS query_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            query TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+        ''')
+        conn.commit()
+        conn.close()
+        print("база данных инициализирована.")
+    except sqlite3.Error as e:
+        print(f"ошибка при инициализации бд: {e}")
+
+def log_query(user_id, username, query):
+    """логирует запрос пользователя в бд."""
+    timestamp = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO query_log (user_id, username, query, timestamp) VALUES (?, ?, ?, ?)",
+            (user_id, username, query, timestamp)
+        )
+        conn.commit()
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"ошибка при логировании запроса: {e}")
+
+def get_logs(page=0, limit=LOGS_PER_PAGE):
+    """получает записи лога из бд с пагинацией."""
+    offset = page * limit
+    logs = []
+    total_count = 0
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Сначала получаем общее количество записей
+        cursor.execute("SELECT COUNT(*) FROM query_log")
+        total_count = cursor.fetchone()[0]
+        
+        # Затем получаем нужную страницу
+        cursor.execute(
+            "SELECT timestamp, user_id, username, query FROM query_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        logs = cursor.fetchall() # fetchall вернет список кортежей
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"ошибка при получении логов: {e}")
+    return logs, total_count
+
+# --- Admin Panel Functions ---
+
+def create_admin_log_keyboard(logs, page=0, total_count=0):
+    """создает клавиатуру для пагинации логов админки."""
+    total_pages = math.ceil(total_count / LOGS_PER_PAGE)
+    
+    buttons = []
+    if total_pages > 1:
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(
+                InlineKeyboardButton(
+                    text="⬅️ назад",
+                    callback_data=f"adminpage_{page-1}"
+                )
+            )
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text=f"{page+1}/{total_pages}",
+                callback_data="admininfo" # To prevent interaction
+            )
+        )
+        if page < total_pages - 1:
+            nav_buttons.append(
+                InlineKeyboardButton(
+                    text="вперед ➡️",
+                    callback_data=f"adminpage_{page+1}"
+                )
+            )
+        buttons.append(nav_buttons)
+        
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- Bot Handlers ---
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -392,56 +471,13 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "🎵 *команды, если что:*\n"
+        "🔧 *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
         "/cancel - отменить загрузки, которые сейчас идут"
     )
     await message.answer(help_text, parse_mode="Markdown")
-
-# --- Playlist Commands ---
-
-@dp.message(Command("createplaylist"))
-async def cmd_create_playlist(message: types.Message):
-    user_id = message.from_user.id
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2 or not args[1].strip():
-        await message.answer("укажи название для плейлиста после команды, например: /createplaylist мой топчик")
-        return
-        
-    playlist_name = args[1].strip()
-    if len(playlist_name) > 50: # Ограничение длины имени
-         await message.answer("слишком длинное название, попробуй короче (макс 50 символов).")
-         return
-         
-    playlist_id = await db.create_playlist(user_id, playlist_name)
-    
-    if playlist_id:
-        await message.answer(f"✅ плейлист '{playlist_name}' создан!")
-    else:
-        # Возможно, уже существует или другая ошибка
-        await message.answer(f"❌ не удалось создать плейлист '{playlist_name}'. может, такой уже есть?")
-
-@dp.message(Command("myplaylists"))
-async def cmd_my_playlists(message: types.Message):
-    user_id = message.from_user.id
-    playlists = await db.get_user_playlists(user_id)
-    
-    if not playlists:
-        await message.answer("у тебя пока нет плейлистов. создай первый командой /createplaylist <название>")
-        return
-    
-    text = "вот твои плейлисты:\n"
-    buttons = []
-    for playlist_id, name in playlists:
-        # Добавляем кнопку для просмотра каждого плейлиста
-        buttons.append([InlineKeyboardButton(text=f"🎵 {name}", callback_data=f"viewpl_{playlist_id}")])
-        
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(text, reply_markup=keyboard)
-    
-# --- End Playlist Commands ---
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
@@ -450,6 +486,9 @@ async def cmd_search(message: types.Message):
         return
     
     query = " ".join(message.text.split()[1:])
+    # Log the query
+    log_query(message.from_user.id, message.from_user.username or message.from_user.first_name, query)
+    
     await message.answer("🔍 ищу треки...")
     
     search_id = str(uuid.uuid4())
@@ -617,6 +656,9 @@ async def handle_text(message: types.Message):
     
     # Treat as search query
     query = message.text
+    # Log the query
+    log_query(message.from_user.id, message.from_user.username or message.from_user.first_name, query)
+    
     await message.answer("🔍 ищу треки...") 
     
     search_id = str(uuid.uuid4())
@@ -634,8 +676,85 @@ async def handle_text(message: types.Message):
         reply_markup=keyboard
     )
 
+@dp.message(Command("adminlog"))
+async def cmd_adminlog(message: types.Message):
+    """отображает лог запросов для админа."""
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("упс, эта команда только для админа.")
+        return
+        
+    page = 0
+    logs, total_count = get_logs(page=page)
+    
+    if not logs:
+        await message.answer("пока нет записей в логе.")
+        return
+        
+    log_text = "📋 *лог запросов:*\n\n" # Use double backslash for newline in MDV2
+    for log_entry in logs:
+        timestamp, user_id, username, query = log_entry
+        # Escape markdown V2 characters: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+        safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
+        safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
+        log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape | for MDV2
+        
+    keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
+    
+    try:
+        await message.answer(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
+    except Exception as e:
+        print(f"Error sending admin log: {e}")
+        # Fallback to sending without markdown if formatting fails
+        await message.answer("Ошибка форматирования лога. Отправляю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("adminpage_"))
+async def process_admin_page_callback(callback: types.CallbackQuery):
+    """обрабатывает пагинацию в админке."""
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("только админ может листать логи.", show_alert=True)
+        return
+        
+    try:
+        page = int(callback.data.split("_")[1])
+        logs, total_count = get_logs(page=page)
+        
+        if not logs:
+            await callback.answer("на этой странице нет логов.", show_alert=True)
+            return
+            
+        log_text = "📋 *лог запросов:*\n\n" # Double backslash for newline
+        for log_entry in logs:
+            timestamp, user_id, username, query = log_entry
+            # Escape markdown V2 characters
+            safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
+            safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
+            log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape |
+            
+        keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
+        
+        # Edit the message with new page content
+        await callback.message.edit_text(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
+        await callback.answer() # Acknowledge the press
+        
+    except (IndexError, ValueError):
+        await callback.answer("ошибка в номере страницы.", show_alert=True)
+    except Exception as e:
+        print(f"Error processing admin page callback: {e}")
+        # Try to edit without markdown on error
+        try:
+            await callback.message.edit_text("Ошибка форматирования лога. Показываю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
+        except Exception as fallback_e:
+             print(f"Fallback edit failed: {fallback_e}")
+             await callback.answer("ой, какая-то ошибка при перелистывании логов.", show_alert=True)
+        
+@dp.callback_query(F.data == "admininfo")
+async def process_admin_info_callback(callback: types.CallbackQuery):
+    # Callback for the page number button in admin log - just acknowledge
+    await callback.answer()
+
 async def main():
-    await db.init_db() # <-- Инициализация БД
+    # Initialize the database
+    init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
