@@ -4,8 +4,6 @@ import tempfile
 import json
 import base64
 import math
-import sqlite3
-import datetime
 from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
@@ -30,9 +28,6 @@ MAX_TRACKS = 150
 MAX_RETRIES = 3
 MIN_SONG_DURATION = 45  # Минимальная длительность трека в секундах
 MAX_SONG_DURATION = 720 # Максимальная длительность трека в секундах (12 минут)
-ADMIN_ID = 5345341969 # Твой ID для доступа к админке
-LOGS_PER_PAGE = 15    # Количество записей лога на странице админки
-DB_NAME = 'bot_log.db'  # Имя файла базы данных
 
 # Хранилища
 download_tasks = defaultdict(dict)
@@ -361,102 +356,6 @@ def set_mp3_metadata(file_path, title, artist):
         print(f"ошибка при установке метаданных: {e}")
         return False
 
-# --- Database Functions ---
-
-def init_db():
-    """инициализирует бд и создает таблицу, если её нет."""
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS query_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            username TEXT,
-            query TEXT NOT NULL,
-            timestamp TEXT NOT NULL
-        )
-        ''')
-        conn.commit()
-        conn.close()
-        print("база данных инициализирована.")
-    except sqlite3.Error as e:
-        print(f"ошибка при инициализации бд: {e}")
-
-def log_query(user_id, username, query):
-    """логирует запрос пользователя в бд."""
-    timestamp = datetime.datetime.now().isoformat(sep=' ', timespec='seconds')
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO query_log (user_id, username, query, timestamp) VALUES (?, ?, ?, ?)",
-            (user_id, username, query, timestamp)
-        )
-        conn.commit()
-        conn.close()
-    except sqlite3.Error as e:
-        print(f"ошибка при логировании запроса: {e}")
-
-def get_logs(page=0, limit=LOGS_PER_PAGE):
-    """получает записи лога из бд с пагинацией."""
-    offset = page * limit
-    logs = []
-    total_count = 0
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        # Сначала получаем общее количество записей
-        cursor.execute("SELECT COUNT(*) FROM query_log")
-        total_count = cursor.fetchone()[0]
-        
-        # Затем получаем нужную страницу
-        cursor.execute(
-            "SELECT timestamp, user_id, username, query FROM query_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-            (limit, offset)
-        )
-        logs = cursor.fetchall() # fetchall вернет список кортежей
-        conn.close()
-    except sqlite3.Error as e:
-        print(f"ошибка при получении логов: {e}")
-    return logs, total_count
-
-# --- Admin Panel Functions ---
-
-def create_admin_log_keyboard(logs, page=0, total_count=0):
-    """создает клавиатуру для пагинации логов админки."""
-    total_pages = math.ceil(total_count / LOGS_PER_PAGE)
-    
-    buttons = []
-    if total_pages > 1:
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="⬅️ назад",
-                    callback_data=f"adminpage_{page-1}"
-                )
-            )
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text=f"{page+1}/{total_pages}",
-                callback_data="admininfo" # To prevent interaction
-            )
-        )
-        if page < total_pages - 1:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="вперед ➡️",
-                    callback_data=f"adminpage_{page+1}"
-                )
-            )
-        buttons.append(nav_buttons)
-        
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-# --- Bot Handlers ---
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -471,7 +370,7 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "🔧 *команды, если что:*\n"
+        "�� *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
@@ -486,9 +385,6 @@ async def cmd_search(message: types.Message):
         return
     
     query = " ".join(message.text.split()[1:])
-    # Log the query
-    log_query(message.from_user.id, message.from_user.username or message.from_user.first_name, query)
-    
     await message.answer("🔍 ищу треки...")
     
     search_id = str(uuid.uuid4())
@@ -656,9 +552,6 @@ async def handle_text(message: types.Message):
     
     # Treat as search query
     query = message.text
-    # Log the query
-    log_query(message.from_user.id, message.from_user.username or message.from_user.first_name, query)
-    
     await message.answer("🔍 ищу треки...") 
     
     search_id = str(uuid.uuid4())
@@ -676,98 +569,7 @@ async def handle_text(message: types.Message):
         reply_markup=keyboard
     )
 
-@dp.message(Command("adminlog"))
-async def cmd_adminlog(message: types.Message):
-    """отображает лог запросов для админа."""
-    print(f"[DEBUG] cmd_adminlog received from user_id: {message.from_user.id} (type: {type(message.from_user.id)}) compared to ADMIN_ID: {ADMIN_ID} (type: {type(ADMIN_ID)})") # Debug print
-    
-    if message.from_user.id != ADMIN_ID:
-        print("[DEBUG] User ID does not match ADMIN_ID.") # Debug print
-        await message.answer("упс, эта команда только для админа.")
-        return
-        
-    print("[DEBUG] User ID matches. Proceeding...") # Debug print
-    page = 0
-    try:
-        logs, total_count = get_logs(page=page)
-        print(f"[DEBUG] get_logs returned {len(logs)} logs, total_count: {total_count}") # Debug print
-        
-        if not logs:
-            print("[DEBUG] No logs found.") # Debug print
-            await message.answer("пока нет записей в логе.")
-            return
-            
-        log_text = "📋 *лог запросов:*\n\n" # Use double backslash for newline in MDV2
-        for log_entry in logs:
-            timestamp, user_id, username, query = log_entry
-            # Escape markdown V2 characters: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
-            safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
-            safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
-            log_text += f"`{timestamp}` \\| `{user_id}` \\| {safe_username} \\| `{safe_query}`\n" # Use \\| to escape | for MDV2 in f-string
-            
-        keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
-        
-        print("[DEBUG] Attempting to send log message...") # Debug print
-        try:
-            await message.answer(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
-            print("[DEBUG] Log message sent successfully.") # Debug print
-        except Exception as e:
-            print(f"[DEBUG] Error sending admin log with MarkdownV2: {e}") # Debug print
-            # Fallback to sending without markdown if formatting fails
-            await message.answer("Ошибка форматирования лога. Отправляю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
-            
-    except Exception as e:
-        print(f"[DEBUG] Error in cmd_adminlog main block: {e}") # Debug print
-        await message.answer("ой, произошла внутренняя ошибка при получении логов.")
-
-@dp.callback_query(F.data.startswith("adminpage_"))
-async def process_admin_page_callback(callback: types.CallbackQuery):
-    """обрабатывает пагинацию в админке."""
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("только админ может листать логи.", show_alert=True)
-        return
-        
-    try:
-        page = int(callback.data.split("_")[1])
-        logs, total_count = get_logs(page=page)
-        
-        if not logs:
-            await callback.answer("на этой странице нет логов.", show_alert=True)
-            return
-            
-        log_text = "📋 *лог запросов:*\n\n" # Double backslash for newline
-        for log_entry in logs:
-            timestamp, user_id, username, query = log_entry
-            # Escape markdown V2 characters
-            safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
-            safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
-            log_text += f"`{timestamp}` \\| `{user_id}` \\| {safe_username} \\| `{safe_query}`\n" # Use \\| to escape |
-            
-        keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
-        
-        # Edit the message with new page content
-        await callback.message.edit_text(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
-        await callback.answer() # Acknowledge the press
-        
-    except (IndexError, ValueError):
-        await callback.answer("ошибка в номере страницы.", show_alert=True)
-    except Exception as e:
-        print(f"Error processing admin page callback: {e}")
-        # Try to edit without markdown on error
-        try:
-            await callback.message.edit_text("Ошибка форматирования лога. Показываю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
-        except Exception as fallback_e:
-             print(f"Fallback edit failed: {fallback_e}")
-             await callback.answer("ой, какая-то ошибка при перелистывании логов.", show_alert=True)
-        
-@dp.callback_query(F.data == "admininfo")
-async def process_admin_info_callback(callback: types.CallbackQuery):
-    # Callback for the page number button in admin log - just acknowledge
-    await callback.answer()
-
 async def main():
-    # Initialize the database
-    init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
