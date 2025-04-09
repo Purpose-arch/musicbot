@@ -1,152 +1,160 @@
 import os
-import requests
-import ssl
-import json
-import tempfile
-import base64
 import asyncio
-import time
-import uuid
+import tempfile
+import json
+import base64
+import math
+from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from vkpymusic import Service
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
-import math
-from collections import defaultdict
+import yt_dlp
+import uuid
+import time
 
-
+# Загрузка переменных окружения
 load_dotenv()
 
-
+# Инициализация бота
 bot = Bot(token=os.getenv('BOT_TOKEN'))
 dp = Dispatcher()
 
-# Увеличиваем время ожидания для SSL-соединений
-session = requests.Session()
-session.request = lambda method, url, **kwargs: requests.Session.request(
-    session, method, url, timeout=60, **kwargs  # Увеличил таймаут с 30 до 60 секунд
-)
-
+# Константы
 TRACKS_PER_PAGE = 10
 MAX_TRACKS = 150
-MAX_RETRIES = 3  # Максимальное количество повторных попыток
+MAX_RETRIES = 3
 
+# Хранилища
 download_tasks = defaultdict(dict)
-# Хранилище результатов поиска, индексированных по уникальному ID поиска
 search_results = {}
+download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
+MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество одновременных загрузок
 
-# Функция с повторными попытками для инициализации сервиса
-def init_service_with_retry():
-    retries = 0
-    last_error = None
-    
-    while retries < MAX_RETRIES:
-        try:
-            service = Service.parse_config()
-            service.session = session
-            return service
-        except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
-            retries += 1
-            last_error = e
-            print(f"Ошибка подключения (попытка {retries}/{MAX_RETRIES}): {str(e)}")
-            time.sleep(2)  # Ждем 2 секунды перед повторной попыткой
-    
-    # Если не удалось инициализировать сервис через конфиг, пробуем через токен
-    try:
-        vk_token = os.getenv('VK_TOKEN')
-        if vk_token:
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-            service = Service(user_agent, vk_token)
-            service.session = session
-            return service
-    except Exception as e:
-        last_error = e
-    
-    # Если все попытки не удались
-    raise Exception(f"не удалось подключиться к vk после {MAX_RETRIES} попыток: {str(last_error)}")
+# Настройки yt-dlp
+ydl_opts = {
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+    'quiet': True,
+    'no_warnings': True,
+    'extract_flat': True,
+    'ffmpeg_location': r'C:\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe',
+    'ffprobe_location': r'C:\ffmpeg-7.1.1-full_build\bin\ffprobe.exe',
+    'prefer_ffmpeg': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'audioformat': 'mp3',  # Явно указываем формат аудио
+    'audioquality': '0',  # Лучшее качество
+    'extractaudio': True,  # Извлекаем только аудио
+    'keepvideo': False,  # Не сохраняем видео
+    'outtmpl': '%(title)s.%(ext)s',  # Шаблон имени файла
+}
 
-# Инициализация сервиса с повторными попытками
-try:
-    service = init_service_with_retry()
-except Exception as e:
-    vk_token = os.getenv('VK_TOKEN')
-    if vk_token:
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-        service = Service(user_agent, vk_token)
-        service.session = session
+def extract_title_and_artist(title):
+    """Улучшенное извлечение названия трека и исполнителя"""
+    # Удаляем общие префиксы
+    prefixes = ['Official Video', 'Official Music Video', 'Official Audio', 'Lyric Video', 'Lyrics']
+    for prefix in prefixes:
+        if title.lower().endswith(f" - {prefix.lower()}"):
+            title = title[:-len(prefix)-3]
+    
+    # Разделяем по разделителям
+    separators = [' - ', ' — ', ' – ', ' | ', ' ~ ']
+    for sep in separators:
+        if sep in title:
+            parts = title.split(sep)
+            if len(parts) == 2:
+                # Проверяем, какая часть больше похожа на название трека
+                if len(parts[0]) > len(parts[1]):
+                    return parts[0].strip(), parts[1].strip()
+                else:
+                    return parts[1].strip(), parts[0].strip()
+    
+    # Если разделитель не найден, пробуем определить по длине и содержанию
+    if len(title) > 30:  # Предполагаем, что длинное название - это название трека
+        return title, "Unknown Artist"
+    elif any(char in title for char in ['(', '[', '{']):  # Если есть скобки, вероятно это название трека
+        return title, "Unknown Artist"
     else:
-        raise Exception("токен vk не найден. сначала запусти get_token.py для получения токена.")
+        return title, "Unknown Artist"
 
-# Функция для установки ID3 тегов (метаданных) MP3 файла
-def set_mp3_metadata(file_path, title, artist):
+async def search_youtube(query, max_results=50):
     try:
-        # Пытаемся открыть существующие теги
-        try:
-            audio = ID3(file_path)
-        except:
-            # Если тегов нет, создаем новые
-            audio = ID3()
+        search_opts = {
+            **ydl_opts,
+            'default_search': 'ytsearch',
+            'max_downloads': max_results,
+            'extract_flat': True,
+        }
         
-        # Устанавливаем название трека
-        audio["TIT2"] = TIT2(encoding=3, text=title)
-        # Устанавливаем исполнителя
-        audio["TPE1"] = TPE1(encoding=3, text=artist)
-        
-        # Сохраняем теги в файл
-        audio.save(file_path)
-        return True
+        with yt_dlp.YoutubeDL(search_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+            if not info or 'entries' not in info:
+                return []
+            
+            results = []
+            for entry in info['entries']:
+                if entry:
+                    title, artist = extract_title_and_artist(entry.get('title', 'Unknown Title'))
+                    # Если artist остался Unknown Artist, используем uploader
+                    if artist == "Unknown Artist":
+                        artist = entry.get('uploader', 'Unknown Artist')
+                    results.append({
+                        'title': title,
+                        'channel': artist,
+                        'url': entry.get('url', ''),
+                        'duration': entry.get('duration', 0)
+                    })
+            return results
     except Exception as e:
-        print(f"ошибка при установке метаданных: {e}")
-        return False
+        print(f"An error occurred during search: {e}")
+        return []
 
-# Функция для создания клавиатуры с треками и кнопками пагинации
 def create_tracks_keyboard(tracks, page=0, search_id=""):
-    # Всего страниц
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
-    
-    # Вычисляем индексы начала и конца для текущей страницы
     start_idx = page * TRACKS_PER_PAGE
     end_idx = min(start_idx + TRACKS_PER_PAGE, len(tracks))
     
-    # Список кнопок
     buttons = []
     
-    # Добавляем кнопки для треков текущей страницы
     for i in range(start_idx, end_idx):
         track = tracks[i]
-        
-        # Собираем данные трека
         track_data = {
-            "title": track.title,
-            "artist": track.artist,
-            "url": track.url,
-            "search_id": search_id  # Добавляем ID поиска к данным трека
+            "title": track['title'],
+            "artist": track['channel'],
+            "url": track['url'],
+            "search_id": search_id
         }
         
-        # Преобразуем в JSON, затем в Base64 для передачи в callback_data
         track_json = json.dumps(track_data, ensure_ascii=False)
-        # Максимальный размер callback_data в Telegram - 64 байта, поэтому сделаем проверку
-        if len(track_json.encode('utf-8')) > 60:  # Оставляем место для префикса
-            # Если данные слишком большие, передаем только индекс и ID поиска
+        if len(track_json.encode('utf-8')) > 60:
             callback_data = f"dl_{i+1}_{search_id}"
         else:
             callback_data = f"d_{base64.b64encode(track_json.encode('utf-8')).decode('utf-8')}"
         
+        duration = track.get('duration', 0)
+        if duration > 0:
+            minutes = int(duration // 60)
+            seconds = int(duration % 60)
+            duration_str = f" ({minutes}:{seconds:02d})"
+        else:
+            duration_str = ""
+        
         buttons.append([
             InlineKeyboardButton(
-                text=f"🎧 {track.title} - {track.artist}",
+                text=f"🎧 {track['title']} - {track['channel']}{duration_str}",
                 callback_data=callback_data
             )
         ])
     
-    # Добавляем кнопки навигации если нужно
     if total_pages > 1:
         nav_buttons = []
-        
-        # Кнопка Предыдущая страница
         if page > 0:
             nav_buttons.append(
                 InlineKeyboardButton(
@@ -154,16 +162,12 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
                     callback_data=f"page_{page-1}_{search_id}"
                 )
             )
-        
-        # Индикатор текущей страницы
         nav_buttons.append(
             InlineKeyboardButton(
                 text=f"{page+1}/{total_pages}",
                 callback_data="info"
             )
         )
-        
-        # Кнопка Следующая страница
         if page < total_pages - 1:
             nav_buttons.append(
                 InlineKeyboardButton(
@@ -171,313 +175,319 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
                     callback_data=f"page_{page+1}_{search_id}"
                 )
             )
-        
         buttons.append(nav_buttons)
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# Асинхронная функция для скачивания трека с повторными попытками
+async def process_download_queue(user_id):
+    """Обработка очереди загрузок для пользователя"""
+    while download_queues[user_id] and len(download_tasks[user_id]) < MAX_PARALLEL_DOWNLOADS:
+        track_data, callback_message = download_queues[user_id].pop(0)
+        status_message = await callback_message.answer(f"⏳ Скачиваю трек: {track_data['title']} - {track_data['channel']}\n●")
+        task = asyncio.create_task(
+            download_track(user_id, track_data, callback_message, status_message)
+        )
+        download_tasks[user_id][track_data["url"]] = task
+
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
-    # Создаем и запускаем задачу анимации
-    animation_task = asyncio.create_task(animate_loading_dots(status_message, track_data["title"], track_data["artist"]))
     
     try:
         title = track_data["title"]
-        artist = track_data["artist"]
+        artist = track_data["channel"]
         url = track_data["url"]
         
-        # Создаем временный файл для сохранения трека
-        with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as temp_file:
-            temp_path = temp_file.name
+        # Создаем безопасное имя файла
+        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+        temp_dir = tempfile.gettempdir()
+        base_temp_path = os.path.join(temp_dir, safe_title)
         
-        # Скачиваем трек через отдельный поток с повторными попытками
-        retry_count = 0
-        download_success = False
-        
-        while retry_count < MAX_RETRIES and not download_success:
-            try:
-                if retry_count > 0:
-                    # Не обновляем сообщение здесь, так как это делает анимация
+        # Удаляем существующие файлы с разными расширениями
+        for ext in ['.mp3', '.m4a', '.webm', '.mp4']:
+            temp_path = f"{base_temp_path}{ext}"
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
                     pass
-                
-                response = await asyncio.to_thread(
-                    lambda: requests.get(url, timeout=60)
-                )
-                
-                with open(temp_path, 'wb') as f:
-                    f.write(response.content)
-                
-                download_success = True
-            except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
-                retry_count += 1
-                if retry_count >= MAX_RETRIES:
-                    raise
-                await asyncio.sleep(2)  # Ждем 2 секунды перед повторной попыткой
         
-        # Устанавливаем метаданные MP3 через отдельный поток
-        await asyncio.to_thread(
-            lambda: set_mp3_metadata(temp_path, title, artist)
-        )
+        download_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': base_temp_path + '.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'ffmpeg_location': r'C:\ffmpeg-7.1.1-full_build\bin\ffmpeg.exe',
+            'ffprobe_location': r'C:\ffmpeg-7.1.1-full_build\bin\ffprobe.exe',
+            'prefer_ffmpeg': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': True,
+            'extract_flat': False,
+        }
         
-        # Отменяем задачу анимации
-        animation_task.cancel()
-        
-        # Отправляем аудио в чат (без caption)
-        audio = FSInputFile(temp_path, filename=f"{artist} - {title}.mp3")
-        await callback_message.answer_audio(
-            audio=audio,
-            title=title,
-            performer=artist
-        )
-        
-        # Удаляем сообщение о статусе загрузки
-        await status_message.delete()
-        
-    except Exception as e:
-        # Отменяем задачу анимации
-        animation_task.cancel()
-        
-        # В случае ошибки обновляем сообщение о статусе
-        await status_message.edit_text(f"❌ не получилось скачать трек: {str(e)}")
-    finally:
-        # Удаляем временный файл
-        if temp_path:
+        with yt_dlp.YoutubeDL(download_opts) as ydl:
             try:
-                os.unlink(temp_path)
+                # Сначала получаем информацию о видео
+                info = ydl.extract_info(url, download=False)
+                if not info:
+                    raise Exception("Не удалось получить информацию о видео")
+                
+                # Затем скачиваем
+                ydl.download([url])
+                
+                # Ищем скачанный файл с любым расширением
+                found_file = None
+                for ext in ['.mp3', '.m4a', '.webm', '.mp4']:
+                    temp_path = f"{base_temp_path}{ext}"
+                    if os.path.exists(temp_path):
+                        found_file = temp_path
+                        break
+                
+                if not found_file:
+                    raise Exception("Файл не был создан после скачивания")
+                
+                temp_path = found_file
+                
+                # Проверяем размер файла
+                if os.path.getsize(temp_path) == 0:
+                    raise Exception("Скачанный файл пуст")
+                
+                # Устанавливаем метаданные
+                if set_mp3_metadata(temp_path, title, artist):
+                    # Удаляем сообщение о загрузке
+                    await bot.delete_message(
+                        chat_id=callback_message.chat.id,
+                        message_id=status_message.message_id
+                    )
+                    
+                    # Отправляем сообщение о отправке
+                    sending_message = await callback_message.answer("📤 Отправляю трек...")
+                    
+                    await bot.send_audio(
+                        chat_id=callback_message.chat.id,
+                        audio=FSInputFile(temp_path),
+                        title=title,
+                        performer=artist
+                    )
+                    
+                    # Удаляем сообщение о отправке
+                    await bot.delete_message(
+                        chat_id=callback_message.chat.id,
+                        message_id=sending_message.message_id
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=callback_message.chat.id,
+                        message_id=status_message.message_id,
+                        text=f"❌ Ошибка при обработке метаданных трека: {title} - {artist}"
+                    )
+            except Exception as e:
+                raise Exception(f"Ошибка при скачивании: {str(e)}")
+    
+    except Exception as e:
+        await bot.edit_message_text(
+            chat_id=callback_message.chat.id,
+            message_id=status_message.message_id,
+            text=f"❌ Ошибка при скачивании трека: {str(e)}"
+        )
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
             except:
                 pass
         
-        # Удаляем задачу из списка активных
-        if user_id in download_tasks and id(asyncio.current_task()) in download_tasks[user_id]:
-            del download_tasks[user_id][id(asyncio.current_task())]
+        # После завершения загрузки проверяем очередь
+        if user_id in download_tasks:
+            del download_tasks[user_id][track_data["url"]]
+            if download_queues[user_id]:
+                await process_download_queue(user_id)
 
-# Функция для анимации точек загрузки
-async def animate_loading_dots(message, title, artist, interval=0.5):
-    # Создаем анимацию с движущейся точкой ●
-    animations = ["● \u2009 \u2009 \u2009", " \u2009● \u2009 \u2009", " \u2009 \u2009● \u2009", " \u2009 \u2009 \u2009●", " \u2009 \u2009● \u2009", " \u2009● \u2009 \u2009"]
-    idx = 0
-    
+def set_mp3_metadata(file_path, title, artist):
     try:
-        while True:
-            await message.edit_text(f"⏳ скачиваю трек: {title} - {artist} {animations[idx]}")
-            idx = (idx + 1) % len(animations)
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        # Когда задача отменена, просто выходим из функции
-        pass
+        try:
+            audio = ID3(file_path)
+        except:
+            audio = ID3()
+        
+        audio["TIT2"] = TIT2(encoding=3, text=title)
+        audio["TPE1"] = TPE1(encoding=3, text=artist)
+        audio.save(file_path)
+        return True
     except Exception as e:
-        print(f"ошибка в анимации: {str(e)}")
+        print(f"ошибка при установке метаданных: {e}")
+        return False
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "🤠 привет\n"
-        "ты уже знаешь как искать песни поэтому не буду говорить лишнего"
+        "👋 Привет! Я бот для поиска и скачивания музыки с YouTube.\n\n"
+        "🔍 Просто отправь мне название трека или исполнителя, и я найду его для тебя!"
     )
 
-@dp.message(Command("downloads"))
-async def cmd_downloads(message: types.Message):
-    user_id = message.from_user.id
-    
-    if user_id not in download_tasks or not download_tasks[user_id]:
-        await message.answer("у тебя нет активных загрузок")
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    help_text = (
+        "🎵 *Как пользоваться ботом:*\n\n"
+        "1️⃣ Просто отправь мне название трека или исполнителя\n"
+        "2️⃣ Выбери нужный трек из списка\n"
+        "3️⃣ Нажми кнопку скачать\n\n"
+        "📝 *Доступные команды:*\n"
+        "/start - Начать работу с ботом\n"
+        "/help - Показать это сообщение\n"
+        "/search - Поиск музыки\n"
+        "/cancel - Отменить текущее скачивание"
+    )
+    await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message(Command("search"))
+async def cmd_search(message: types.Message):
+    if len(message.text.split()) < 2:
+        await message.answer("❌ Пожалуйста, укажите запрос для поиска.\nПример: /search Coldplay Yellow")
         return
     
-    downloads_count = len(download_tasks[user_id])
-    await message.answer(f"у тебя {downloads_count} активных загрузок")
+    query = " ".join(message.text.split()[1:])
+    await message.answer("🔍 Ищу треки...")
+    
+    search_id = str(uuid.uuid4())
+    tracks = await search_youtube(query, MAX_TRACKS)
+    
+    if not tracks:
+        await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
+        return
+    
+    search_results[search_id] = tracks
+    keyboard = create_tracks_keyboard(tracks, 0, search_id)
+    
+    await message.answer(
+        f"🎵 Найдено {len(tracks)} треков по запросу '{query}':",
+        reply_markup=keyboard
+    )
 
-@dp.message()
-async def search_music(message: types.Message):
+@dp.message(Command("cancel"))
+async def cmd_cancel(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in download_tasks:
+        for task in download_tasks[user_id].values():
+            task.cancel()
+        download_tasks[user_id].clear()
+        await message.answer("✅ Все текущие загрузки отменены.")
+    else:
+        await message.answer("❌ Нет активных загрузок для отмены.")
+
+@dp.callback_query(F.data.startswith("d_"))
+async def process_download_callback(callback: types.CallbackQuery):
     try:
-        loading_msg = await message.answer("🔍 ищу песни...")
+        track_data = json.loads(base64.b64decode(callback.data[2:]).decode('utf-8'))
+        user_id = callback.from_user.id
         
-        query = message.text
+        # Проверяем количество активных загрузок
+        active_downloads = sum(1 for task in download_tasks[user_id].values() if not task.done())
         
-        try:
-            # Поиск треков с повторными попытками
-            tracks = None
-            retry_count = 0
-            
-            while retry_count < MAX_RETRIES and tracks is None:
-                try:
-                    if retry_count > 0:
-                        await loading_msg.edit_text(f"🔍 ищу песни... (попытка {retry_count+1})")
-                    
-                    tracks = service.search_songs_by_text(query, count=MAX_TRACKS)
-                except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
-                    retry_count += 1
-                    if retry_count >= MAX_RETRIES:
-                        raise
-                    await asyncio.sleep(2)  # Ждем 2 секунды перед повторной попыткой
-            
-        except (requests.exceptions.Timeout, ssl.SSLError, ConnectionError) as e:
-            await loading_msg.edit_text("⏱️ превышено время ожидания соединения с vk, попробуй еще раз позже или используй vpn")
-            return
-        except Exception as e:
-            # Проверяем, является ли ошибка SSL handshake timeout
-            error_str = str(e)
-            if "_ssl.c:989: The handshake operation timed out" in error_str:
-                await loading_msg.edit_text("🚬 чото ошибка\nтакое иногда случается\nпопробуй еще раз пожалуста")
-            else:
-                await loading_msg.edit_text(f"❌ ошибка поиска: {error_str}")
-            return
-        
-        if not tracks:
-            await loading_msg.edit_text("😔 ничего не нашлось, попробуй другой запрос")
-            return
-            
-        # Создаем уникальный идентификатор для этого поиска
-        search_id = str(uuid.uuid4())
-        
-        # Сохраняем результаты поиска с уникальным ID
-        search_results[search_id] = {
-            "tracks": tracks,
-            "query": query,
-            "user_id": message.from_user.id
-        }
-        
-        # Получаем клавиатуру с треками первой страницы
-        keyboard = create_tracks_keyboard(tracks, page=0, search_id=search_id)
-        
-        # Формируем заголовок с информацией о количестве найденных треков
-        response = f"🎵 нашлись песни:"
-        
-        await loading_msg.edit_text(response, reply_markup=keyboard)
+        if active_downloads >= MAX_PARALLEL_DOWNLOADS:
+            # Добавляем в очередь, если достигнут лимит
+            download_queues[user_id].append((track_data, callback.message))
+            await callback.message.answer(
+                f"⏳ Загрузка добавлена в очередь. "
+                f"Активных загрузок: {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+            )
+        else:
+            # Начинаем загрузку сразу
+            status_message = await callback.message.answer(f"⏳ Скачиваю трек: {track_data['title']} - {track_data['channel']}")
+            task = asyncio.create_task(
+                download_track(user_id, track_data, callback.message, status_message)
+            )
+            download_tasks[user_id][track_data["url"]] = task
         
     except Exception as e:
-        await message.answer(f"❌ что-то пошло не так: {str(e)}")
+        await callback.message.answer(f"❌ Ошибка: {str(e)}")
+
+@dp.callback_query(F.data.startswith("dl_"))
+async def process_download_callback_with_index(callback: types.CallbackQuery):
+    try:
+        parts = callback.data.split("_")
+        track_index = int(parts[1]) - 1
+        search_id = parts[2]
+        
+        if search_id not in search_results:
+            await callback.message.answer("❌ Результаты поиска устарели. Пожалуйста, выполните поиск снова.")
+            return
+        
+        tracks = search_results[search_id]
+        if 0 <= track_index < len(tracks):
+            track_data = tracks[track_index]
+            user_id = callback.from_user.id
+            
+            # Проверяем количество активных загрузок
+            active_downloads = sum(1 for task in download_tasks[user_id].values() if not task.done())
+            
+            if active_downloads >= MAX_PARALLEL_DOWNLOADS:
+                # Добавляем в очередь, если достигнут лимит
+                download_queues[user_id].append((track_data, callback.message))
+                await callback.message.answer(
+                    f"⏳ Загрузка добавлена в очередь. "
+                    f"Активных загрузок: {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+                )
+            else:
+                # Начинаем загрузку сразу
+                status_message = await callback.message.answer(f"⏳ Скачиваю трек: {track_data['title']} - {track_data['channel']}")
+                task = asyncio.create_task(
+                    download_track(user_id, track_data, callback.message, status_message)
+                )
+                download_tasks[user_id][track_data["url"]] = task
+            
+        else:
+            await callback.message.answer("❌ Трек не найден.")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка: {str(e)}")
 
 @dp.callback_query(F.data.startswith("page_"))
-async def handle_page_navigation(callback: types.CallbackQuery):
+async def process_page_callback(callback: types.CallbackQuery):
     try:
-        # Получаем номер страницы и ID поиска из callback_data
         parts = callback.data.split("_")
         page = int(parts[1])
         search_id = parts[2]
         
-        # Получаем треки из кэша по ID поиска
         if search_id not in search_results:
-            await callback.answer("❌ информация о треках устарела, сделай новый поиск")
+            await callback.answer("❌ Результаты поиска устарели.", show_alert=True)
             return
         
-        # Проверяем, что результаты принадлежат этому пользователю
-        if search_results[search_id]["user_id"] != callback.from_user.id:
-            await callback.answer("❌ эти результаты принадлежат другому пользователю")
-            return
+        tracks = search_results[search_id]
+        keyboard = create_tracks_keyboard(tracks, page, search_id)
         
-        tracks = search_results[search_id]["tracks"]
-        
-        # Создаем клавиатуру для новой страницы
-        keyboard = create_tracks_keyboard(tracks, page=page, search_id=search_id)
-        
-        # Формируем заголовок с информацией о количестве найденных треков
-        response = f"🎵 нашлись песни:"
-        
-        # Обновляем сообщение с новой клавиатурой
-        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
         await callback.answer()
-        
     except Exception as e:
-        await callback.answer(f"❌ ошибка: {str(e)}")
+        await callback.answer(f"❌ Ошибка: {str(e)}", show_alert=True)
 
-@dp.callback_query(F.data == "info")
-async def handle_info_button(callback: types.CallbackQuery):
-    # Просто отображаем информационное сообщение при нажатии на индикатор страницы
-    await callback.answer("текущая страница / всего страниц")
-
-@dp.callback_query(F.data.startswith("d_"))
-async def download_track_by_data(callback: types.CallbackQuery):
-    try:
-        user_id = callback.from_user.id
-        
-        # Отображаем сообщение, но не блокируем пользователя
-        await callback.answer("⏳ скачиваю трек...")
-        
-        # Декодируем данные трека из callback_data
-        encoded_data = callback.data[2:]  # Убираем префикс "d_"
-        track_data = json.loads(base64.b64decode(encoded_data).decode('utf-8'))
-        
-        title = track_data["title"]
-        artist = track_data["artist"]
-        
-        # Проверяем, есть ли search_id в данных трека
-        if "search_id" in track_data and track_data["search_id"] not in search_results:
-            await callback.message.answer("❌ информация о треке устарела, сделай новый поиск")
-            return
-        
-        # Отправляем начальное сообщение о загрузке
-        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}")
-        
-        # Создаем асинхронную задачу для скачивания трека
-        task = asyncio.create_task(
-            download_track(user_id, track_data, callback.message, status_message)
-        )
-        
-        # Сохраняем задачу в список активных скачиваний
-        download_tasks[user_id][id(task)] = task
-        
-    except Exception as e:
-        await callback.message.answer(f"❌ что-то пошло не так: {str(e)}")
-
-@dp.callback_query(F.data.startswith("dl_"))
-async def download_track_by_index(callback: types.CallbackQuery):
-    try:
-        user_id = callback.from_user.id
-        
-        # Отображаем сообщение, но не блокируем пользователя
-        await callback.answer("⏳ скачиваю трек...")
-        
-        # Парсим данные из callback_data
-        parts = callback.data.split("_")
-        track_index = int(parts[1]) - 1
-        search_id = parts[2]  # Получаем ID поиска
-        
-        # Проверяем, есть ли треки в кэше по ID поиска
-        if search_id not in search_results:
-            await callback.message.answer("❌ информация о треке устарела, сделай новый поиск")
-            return
-        
-        # Проверяем, что результаты принадлежат этому пользователю
-        if search_results[search_id]["user_id"] != user_id:
-            await callback.answer("❌ эти результаты принадлежат другому пользователю")
-            return
-        
-        tracks = search_results[search_id]["tracks"]
-        
-        if track_index < 0 or track_index >= len(tracks):
-            await callback.message.answer("❌ что-то не так с индексом трека, сделай новый поиск")
-            return
-        
-        track = tracks[track_index]
-        title = track.title
-        artist = track.artist
-        
-        # Создаем данные трека для скачивания
-        track_data = {
-            "title": title,
-            "artist": artist,
-            "url": track.url,
-            "search_id": search_id
-        }
-        
-        # Отправляем начальное сообщение о загрузке
-        status_message = await callback.message.answer(f"⏳ скачиваю трек: {title} - {artist}")
-        
-        # Создаем асинхронную задачу для скачивания трека
-        task = asyncio.create_task(
-            download_track(user_id, track_data, callback.message, status_message)
-        )
-        
-        # Сохраняем задачу в список активных скачиваний
-        download_tasks[user_id][id(task)] = task
-        
-    except Exception as e:
-        await callback.message.answer(f"❌ что-то пошло не так: {str(e)}")
+@dp.message()
+async def handle_text(message: types.Message):
+    if message.text.startswith('/'):
+        return
+    
+    await message.answer("🔍 Ищу треки...")
+    
+    search_id = str(uuid.uuid4())
+    tracks = await search_youtube(message.text, MAX_TRACKS)
+    
+    if not tracks:
+        await message.answer("❌ Ничего не найдено. Попробуйте другой запрос.")
+        return
+    
+    search_results[search_id] = tracks
+    keyboard = create_tracks_keyboard(tracks, 0, search_id)
+    
+    await message.answer(
+        f"🎵 Найдено {len(tracks)} треков по запросу '{message.text}':",
+        reply_markup=keyboard
+    )
 
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main()) 
