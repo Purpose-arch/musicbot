@@ -703,7 +703,7 @@ async def cmd_adminlog(message: types.Message):
             # Escape markdown V2 characters: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
             safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
             safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
-            log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape | for MDV2
+            log_text += f"`{timestamp}` \\| `{user_id}` \\| {safe_username} \\| `{safe_query}`\n" # Use \\| to escape | for MDV2 in f-string
             
         keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
         
@@ -741,7 +741,7 @@ async def process_admin_page_callback(callback: types.CallbackQuery):
             # Escape markdown V2 characters
             safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
             safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
-            log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape |
+            log_text += f"`{timestamp}` \\| `{user_id}` \\| {safe_username} \\| `{safe_query}`\n" # Use \\| to escape |
             
         keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
         
