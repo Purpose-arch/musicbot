@@ -273,8 +273,7 @@ async def animate_loading_dots(message, title, artist, interval=0.5):
 async def cmd_start(message: types.Message):
     await message.answer(
         "🤠 привет\n"
-        "это чистый не нагруженный бот для поиска песен\n"
-        "ты уже знаещь как искать поэтому не буду говорить лишнего"
+        "ты уже знаешь как искать песни поэтому не буду говорить лишнего"
     )
 
 @dp.message(Command("downloads"))
@@ -342,7 +341,7 @@ async def search_music(message: types.Message):
         keyboard = create_tracks_keyboard(tracks, page=0, search_id=search_id)
         
         # Формируем заголовок с информацией о количестве найденных треков
-        response = f"🎵 нашлось треков: {len(tracks)}"
+        response = f"🎵 нашлись песни:"
         
         await loading_msg.edit_text(response, reply_markup=keyboard)
         
@@ -373,7 +372,7 @@ async def handle_page_navigation(callback: types.CallbackQuery):
         keyboard = create_tracks_keyboard(tracks, page=page, search_id=search_id)
         
         # Формируем заголовок с информацией о количестве найденных треков
-        response = f"🎵 нашлись треки:"
+        response = f"🎵 нашлись песни:"
         
         # Обновляем сообщение с новой клавиатурой
         await callback.message.edit_text(response, reply_markup=keyboard)
