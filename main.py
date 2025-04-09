@@ -679,33 +679,46 @@ async def handle_text(message: types.Message):
 @dp.message(Command("adminlog"))
 async def cmd_adminlog(message: types.Message):
     """отображает лог запросов для админа."""
+    print(f"[DEBUG] cmd_adminlog received from user_id: {message.from_user.id} (type: {type(message.from_user.id)}) compared to ADMIN_ID: {ADMIN_ID} (type: {type(ADMIN_ID)})") # Debug print
+    
     if message.from_user.id != ADMIN_ID:
+        print("[DEBUG] User ID does not match ADMIN_ID.") # Debug print
         await message.answer("упс, эта команда только для админа.")
         return
         
+    print("[DEBUG] User ID matches. Proceeding...") # Debug print
     page = 0
-    logs, total_count = get_logs(page=page)
-    
-    if not logs:
-        await message.answer("пока нет записей в логе.")
-        return
-        
-    log_text = "📋 *лог запросов:*\n\n" # Use double backslash for newline in MDV2
-    for log_entry in logs:
-        timestamp, user_id, username, query = log_entry
-        # Escape markdown V2 characters: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
-        safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
-        safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
-        log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape | for MDV2
-        
-    keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
-    
     try:
-        await message.answer(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
+        logs, total_count = get_logs(page=page)
+        print(f"[DEBUG] get_logs returned {len(logs)} logs, total_count: {total_count}") # Debug print
+        
+        if not logs:
+            print("[DEBUG] No logs found.") # Debug print
+            await message.answer("пока нет записей в логе.")
+            return
+            
+        log_text = "📋 *лог запросов:*\n\n" # Use double backslash for newline in MDV2
+        for log_entry in logs:
+            timestamp, user_id, username, query = log_entry
+            # Escape markdown V2 characters: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+            safe_username = username.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!") if username else "_(нет юзернейма)_"
+            safe_query = query.replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("]", "\\]").replace("(", "\\(").replace(")", "\\)").replace("~", "\\~").replace("`", "\\`").replace(">", "\\>").replace("#", "\\#").replace("+", "\\+").replace("-", "\\-").replace("=", "\\=").replace("|", "\\|").replace("{", "\\{").replace("}", "\\}").replace(".", "\\.").replace("!", "\\!")
+            log_text += f"`{timestamp}` \| `{user_id}` \| {safe_username} \| `{safe_query}`\n" # Escape | for MDV2
+            
+        keyboard = create_admin_log_keyboard(logs, page=page, total_count=total_count)
+        
+        print("[DEBUG] Attempting to send log message...") # Debug print
+        try:
+            await message.answer(log_text, reply_markup=keyboard, parse_mode="MarkdownV2")
+            print("[DEBUG] Log message sent successfully.") # Debug print
+        except Exception as e:
+            print(f"[DEBUG] Error sending admin log with MarkdownV2: {e}") # Debug print
+            # Fallback to sending without markdown if formatting fails
+            await message.answer("Ошибка форматирования лога. Отправляю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
+            
     except Exception as e:
-        print(f"Error sending admin log: {e}")
-        # Fallback to sending without markdown if formatting fails
-        await message.answer("Ошибка форматирования лога. Отправляю как простой текст:\n" + log_text.replace("\\", ""), reply_markup=keyboard)
+        print(f"[DEBUG] Error in cmd_adminlog main block: {e}") # Debug print
+        await message.answer("ой, произошла внутренняя ошибка при получении логов.")
 
 @dp.callback_query(F.data.startswith("adminpage_"))
 async def process_admin_page_callback(callback: types.CallbackQuery):
