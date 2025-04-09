@@ -26,6 +26,8 @@ dp = Dispatcher()
 TRACKS_PER_PAGE = 10
 MAX_TRACKS = 150
 MAX_RETRIES = 3
+MIN_SONG_DURATION = 45  # Минимальная длительность трека в секундах
+MAX_SONG_DURATION = 720 # Максимальная длительность трека в секундах (12 минут)
 
 # Хранилища
 download_tasks = defaultdict(dict)
@@ -99,6 +101,11 @@ async def search_youtube(query, max_results=50):
             results = []
             for entry in info['entries']:
                 if entry:
+                    duration = entry.get('duration', 0)
+                    # Filter by duration
+                    if not duration or not (MIN_SONG_DURATION <= duration <= MAX_SONG_DURATION):
+                        continue # Skip if duration is missing or outside the range
+                        
                     title, artist = extract_title_and_artist(entry.get('title', 'Unknown Title'))
                     # Если artist остался Unknown Artist, используем uploader
                     if artist == "Unknown Artist":
