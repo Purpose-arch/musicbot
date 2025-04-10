@@ -440,13 +440,16 @@ async def cmd_search(message: types.Message):
         return
     
     query = " ".join(message.text.split()[1:])
-    await message.answer("🔍 ищу треки...")
+    # Сохраняем сообщение "ищу треки..."
+    searching_message = await message.answer("🔍 ищу треки...")
     
     search_id = str(uuid.uuid4())
     tracks = await search_youtube(query, MAX_TRACKS)
     
     if not tracks:
         await message.answer("❌ чет ничего не нашлось. попробуй другой запрос?")
+        # Удаляем сообщение "ищу треки..." если ничего не найдено
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     
     search_results[search_id] = tracks
@@ -456,6 +459,8 @@ async def cmd_search(message: types.Message):
         f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
         reply_markup=keyboard
     )
+    # Удаляем сообщение "ищу треки..." после отправки результатов
+    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
@@ -607,13 +612,16 @@ async def handle_text(message: types.Message):
     
     # Treat as search query
     query = message.text
-    await message.answer("🔍 ищу треки...") 
+    # Сохраняем сообщение "ищу треки..."
+    searching_message = await message.answer("🔍 ищу треки...") 
     
     search_id = str(uuid.uuid4())
     tracks = await search_youtube(query, MAX_TRACKS)
     
     if not tracks:
         await message.answer("❌ ничего не нашел по твоему запросу. попробуй еще раз?")
+        # Удаляем сообщение "ищу треки..." если ничего не найдено
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     
     search_results[search_id] = tracks
@@ -623,6 +631,8 @@ async def handle_text(message: types.Message):
         f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
         reply_markup=keyboard
     )
+    # Удаляем сообщение "ищу треки..." после отправки результатов
+    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
 async def main():
     await dp.start_polling(bot)
