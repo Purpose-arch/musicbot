@@ -214,111 +214,141 @@ async def download_track(user_id, track_data, callback_message, status_message):
         artist = track_data["channel"]
         url = track_data["url"]
         
-        # Создаем безопасное имя файла
-        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
-        temp_dir = tempfile.gettempdir()
-        base_temp_path = os.path.join(temp_dir, safe_title)
+        # Создаем БОЛЕЕ безопасное имя файла
+        # Заменяем пробелы на _, удаляем все кроме букв/цифр/./_/- 
+        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
+        # Ограничим длину на всякий случай
+        safe_title = safe_title[:100] 
+        if not safe_title:
+             safe_title = f"audio_{uuid.uuid4()}" # Fallback name
+
+        temp_dir = tempfile.gettempdir() # Должен быть /tmp в контейнере
+        base_temp_path = os.path.join(temp_dir, safe_title) # e.g., /tmp/Ya_uebyvayu_v_dzhaz
         
-        # Удаляем существующие файлы с разными расширениями
-        for ext in ['.mp3', '.m4a', '.webm', '.mp4']:
-            temp_path = f"{base_temp_path}{ext}"
-            if os.path.exists(temp_path):
+        # Удаляем существующие файлы с разными расширениями перед скачиванием
+        # Важно сделать это ДО вызова ydl.download
+        for ext in ['.mp3', '.m4a', '.webm', '.mp4', '.opus', '.ogg', '.aac', '.part']:
+            potential_path = f"{base_temp_path}{ext}"
+            if os.path.exists(potential_path):
                 try:
-                    os.remove(temp_path)
-                except:
-                    pass
+                    os.remove(potential_path)
+                    print(f"Removed existing file: {potential_path}")
+                except OSError as e:
+                    print(f"Warning: Could not remove existing file {potential_path}: {e}")
         
+        # Переопределяем ydl_opts для этой конкретной загрузки
         download_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio/best', # Предпочитаем m4a для конвертации
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'outtmpl': base_temp_path + '.mp3',
-            'quiet': True,
-            'no_warnings': True,
+            # ВАЖНО: outtmpl должен включать полный путь и расширение .%(ext)s 
+            # чтобы ytdl сам обработал имя до и после конвертации
+            'outtmpl': base_temp_path + '.%(ext)s', 
+            'quiet': False, # Отключаем quiet
+            'verbose': True, # Включаем подробный лог для отладки
+            'no_warnings': False,
             'prefer_ffmpeg': True,
             'nocheckcertificate': True,
-            'ignoreerrors': True,
-            'extract_flat': False,
+            'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
+            'extract_flat': False, # Нужно для скачивания, а не только для поиска
+            'ffmpeg_location': '/usr/bin/ffmpeg' # Оставляем явное указание пути
         }
         
+        expected_mp3_path = base_temp_path + '.mp3'
+
         try:
-            # Update status message to indicate actual download start
             await bot.edit_message_text(
                 f"⏳ качаю трек: {title} - {artist}...",
                 chat_id=callback_message.chat.id,
                 message_id=status_message.message_id
             )
             
-            # Run the blocking download/conversion in a separate thread
+            print(f"\nStarting download for: {title} - {artist}")
+            print(f"URL: {url}")
+            print(f"Output template: {download_opts['outtmpl']}")
+            print(f"Expected MP3 path: {expected_mp3_path}")
+            print(f"Using download options: {download_opts}")
+
+            # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
             await loop.run_in_executor(
-                None,  # Use default ThreadPoolExecutor
+                None,  # Используем стандартный ThreadPoolExecutor
                 _blocking_download_and_convert,
                 url,
-                download_opts
+                download_opts # Передаем локальные download_opts
             )
             
-            # --- File checks after download ---
-            expected_mp3_path = base_temp_path + '.mp3'
+            print(f"Finished blocking download call for: {title} - {artist}")
+
+            # --- Проверка наличия файла после скачивания --- 
             if not os.path.exists(expected_mp3_path):
-                # Check for other possible extensions only as a fallback for debugging/errors
-                other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac']
-                found_alternative = False
-                for ext in other_extensions:
-                    potential_path = f"{base_temp_path}{ext}"
-                    if os.path.exists(potential_path):
-                        print(f"Warning: MP3 post-processing might have failed. Found {potential_path} instead of {expected_mp3_path}")
-                        # Attempt to remove the incorrect format file if found
-                        try:
-                           os.remove(potential_path)
-                        except Exception as rem_err:
-                           print(f"Could not remove intermediate file {potential_path}: {rem_err}")
-                        found_alternative = True
-                        break
+                print(f"ERROR: Expected MP3 file NOT FOUND at {expected_mp3_path} after download attempt.")
+                # Дополнительно проверим, не остался ли файл с другим расширением (ошибка конвертации?)
+                found_other = False
+                for ext in ['.m4a', '.webm', '.opus', '.ogg', '.aac']:
+                     potential_path = f"{base_temp_path}{ext}"
+                     if os.path.exists(potential_path):
+                         print(f"Warning: Found intermediate file {potential_path} instead of MP3. Conversion likely failed.")
+                         found_other = True
+                         # Попробуем удалить промежуточный файл
+                         try: 
+                             os.remove(potential_path)
+                         except OSError as e:
+                             print(f"Could not remove intermediate file {potential_path}: {e}")
+                         break
                 raise Exception(f"файл {expected_mp3_path} не создался после скачивания/конвертации.")
-
-            temp_path = expected_mp3_path # Use the expected mp3 path
-
+            
+            temp_path = expected_mp3_path 
+            print(f"Confirmed MP3 file exists at: {temp_path}")
+            
             if os.path.getsize(temp_path) == 0:
+                print(f"ERROR: Downloaded file {temp_path} is empty.")
                 raise Exception("скачанный файл пустой, чет не то")
+            
+            print(f"File size: {os.path.getsize(temp_path)} bytes")
 
             # --- NEW: Validate MP3 file structure ---
             try:
-                # Try loading the file with mutagen.mp3 to check integrity
-                audio_check = MP3(temp_path)
+                print(f"Validating MP3 structure for {temp_path}...")
+                audio_check = MP3(temp_path) 
                 if not audio_check.info.length > 0:
-                     # It loaded, but has no duration - likely corrupt/incomplete
+                     print(f"ERROR: MP3 file {temp_path} loaded but has zero length/duration.")
                      raise Exception("файл MP3 скачался, но похоже битый (нулевая длина)")
                 print(f"MP3 Validation PASSED for {temp_path}, duration: {audio_check.info.length}s")
             except Exception as validation_error:
-                # If mutagen.mp3.MP3() fails, the file is likely not a valid MP3
+                print(f"ERROR: MP3 Validation FAILED for {temp_path}: {validation_error}")
                 raise Exception(f"скачанный файл не является валидным MP3: {validation_error}")
 
             # --- Metadata and Sending ---
-            # This part now only happens if validation passes
+            print(f"Setting metadata for {temp_path}...")
             if set_mp3_metadata(temp_path, title, artist):
+                print(f"Metadata set successfully. Preparing to send {temp_path}.")
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
                     message_id=status_message.message_id
                 )
                 sending_message = await callback_message.answer("📤 отправляю трек...") 
+                print(f"Sending audio {temp_path}...")
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
                     audio=FSInputFile(temp_path),
                     title=title,
                     performer=artist
                 )
+                print(f"Audio sent successfully. Deleting sending message.")
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
                     message_id=sending_message.message_id
                 )
+                print(f"Finished processing track: {title} - {artist}")
             else:
-                # Error specific to metadata setting
+                print(f"ERROR: Failed to set metadata for {temp_path}.")
                 raise Exception(f"ошибка при установке метаданных для: {title} - {artist}")
 
         except Exception as e:
+            print(f"ERROR during download/processing for {title} - {artist}: {e}")
             # Catch errors from download, file checks, or metadata setting
             error_text = f"❌ блин, ошибка: {str(e)}"
             if len(error_text) > 4000: 
@@ -335,28 +365,36 @@ async def download_track(user_id, track_data, callback_message, status_message):
                     await callback_message.answer(error_text)
                 except Exception as send_error:
                     print(f"Failed to send new message for error: {send_error}")
-            # Re-raise the exception to potentially stop further processing if needed elsewhere
-            # (though in this structure, it mainly signals the end of this specific track task)
-            # raise e # Decide if re-raising is needed; for now, just informing the user is enough.
 
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
+                print(f"Cleaning up temporary file: {temp_path}")
                 os.remove(temp_path)
             except Exception as remove_error:
                 print(f"Warning: Failed to remove temp file {temp_path}: {remove_error}")
+        else:
+            print(f"No temporary file found at {temp_path} to clean up, or path is None.")
         
         # Clean up task tracking and check queue
         if user_id in download_tasks:
             # Use get to avoid KeyError if URL was already removed (e.g., by cancel)
             if download_tasks[user_id].pop(track_data["url"], None):
-                 pass # Successfully removed task entry
+                 print(f"Removed task entry for URL: {track_data['url']}")
+            else:
+                 print(f"Task entry for URL {track_data['url']} not found or already removed.")
             # Remove user entry if no tasks left
             if not download_tasks[user_id]:
+                print(f"No tasks left for user {user_id}, removing user entry.")
                 del download_tasks[user_id]
+            else:
+                 print(f"{len(download_tasks[user_id])} tasks remaining for user {user_id}.")
             # Check queue regardless of success/failure of current task
-            if download_queues[user_id]: 
+            if user_id in download_queues and download_queues[user_id]: 
+                print(f"Processing next item in queue for user {user_id}.")
                 await process_download_queue(user_id)
+            else:
+                 print(f"Download queue for user {user_id} is empty or user not found.")
 
 def set_mp3_metadata(file_path, title, artist):
     try:
