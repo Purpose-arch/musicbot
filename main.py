@@ -37,7 +37,8 @@ MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество од
 
 # Настройки yt-dlp
 ydl_opts = {
-    'format': 'bestaudio/best',
+    # Prioritize m4a, then best audio, then best overall
+    'format': 'bestaudio[ext=m4a]/bestaudio/best',
     'postprocessors': [{
         'key': 'FFmpegExtractAudio',
         'preferredcodec': 'mp3',
@@ -49,11 +50,9 @@ ydl_opts = {
     'prefer_ffmpeg': True,
     'nocheckcertificate': True,
     'ignoreerrors': True,
-    'audioformat': 'mp3',  # Явно указываем формат аудио
-    'audioquality': '0',  # Лучшее качество
-    'extractaudio': True,  # Извлекаем только аудио
-    'keepvideo': False,  # Не сохраняем видео
-    'outtmpl': '%(title)s.%(ext)s',  # Шаблон имени файла
+    # Note: 'audioformat', 'audioquality', 'extractaudio', 'keepvideo'
+    # are implicitly handled by the postprocessor or are download-specific.
+    # 'outtmpl' is better handled dynamically in download_track.
 }
 
 def extract_title_and_artist(title):
@@ -264,23 +263,40 @@ async def download_track(user_id, track_data, callback_message, status_message):
             expected_mp3_path = base_temp_path + '.mp3'
             if not os.path.exists(expected_mp3_path):
                 # Check for other possible extensions only as a fallback for debugging/errors
-                other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac'] 
+                other_extensions = ['.m4a', '.webm', '.opus', '.ogg', '.aac']
                 found_alternative = False
                 for ext in other_extensions:
                     potential_path = f"{base_temp_path}{ext}"
                     if os.path.exists(potential_path):
                         print(f"Warning: MP3 post-processing might have failed. Found {potential_path} instead of {expected_mp3_path}")
+                        # Attempt to remove the incorrect format file if found
+                        try:
+                           os.remove(potential_path)
+                        except Exception as rem_err:
+                           print(f"Could not remove intermediate file {potential_path}: {rem_err}")
                         found_alternative = True
-                        break 
+                        break
                 raise Exception(f"файл {expected_mp3_path} не создался после скачивания/конвертации.")
-            
+
             temp_path = expected_mp3_path # Use the expected mp3 path
-            
+
             if os.path.getsize(temp_path) == 0:
                 raise Exception("скачанный файл пустой, чет не то")
-            
+
+            # --- NEW: Validate MP3 file structure ---
+            try:
+                # Try loading the file with mutagen.mp3 to check integrity
+                audio_check = MP3(temp_path)
+                if not audio_check.info.length > 0:
+                     # It loaded, but has no duration - likely corrupt/incomplete
+                     raise Exception("файл MP3 скачался, но похоже битый (нулевая длина)")
+                print(f"MP3 Validation PASSED for {temp_path}, duration: {audio_check.info.length}s")
+            except Exception as validation_error:
+                # If mutagen.mp3.MP3() fails, the file is likely not a valid MP3
+                raise Exception(f"скачанный файл не является валидным MP3: {validation_error}")
+
             # --- Metadata and Sending ---
-            # This part happens only if download and file checks passed
+            # This part now only happens if validation passes
             if set_mp3_metadata(temp_path, title, artist):
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
