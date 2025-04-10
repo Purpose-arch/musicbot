@@ -4,16 +4,18 @@ import tempfile
 import json
 import base64
 import math
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
+import subprocess
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -34,6 +36,9 @@ download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
 MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество одновременных загрузок
+
+# Добавим хранилище для сообщений статуса загрузки
+download_status_messages = defaultdict(dict) # user_id -> {download_url: message_object}
 
 # Настройки yt-dlp
 ydl_opts = {
@@ -184,16 +189,41 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# --- НОВАЯ ФУНКЦИЯ для кнопки отмены --- 
+def create_cancel_markup(download_url: str) -> InlineKeyboardMarkup:
+    """Создает клавиатуру с одной кнопкой 'Отмена' для конкретной загрузки."""
+    buttons = [[InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_dl_{download_url}")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# --- Конец новой функции ---
+
 async def process_download_queue(user_id):
     """Обработка очереди загрузок для пользователя"""
-    while download_queues[user_id] and len(download_tasks[user_id]) < MAX_PARALLEL_DOWNLOADS:
-        track_data, callback_message = download_queues[user_id].pop(0)
-        # Slightly informal status message
-        status_message = await callback_message.answer(f"⏳ ставлю в очередь на скачивание: {track_data['title']} - {track_data['channel']}\n...") 
-        task = asyncio.create_task(
-            download_track(user_id, track_data, callback_message, status_message)
-        )
-        download_tasks[user_id][track_data["url"]] = task
+    while download_queues[user_id] and len(download_tasks.get(user_id, {})) < MAX_PARALLEL_DOWNLOADS:
+        track_data, original_message = download_queues[user_id].pop(0)
+        download_url = track_data['url']
+        
+        # --- Изменено: Отправляем сообщение с кнопкой отмены --- 
+        try:
+            status_message = await original_message.answer(
+                f"⏳ ставлю в очередь на скачивание: {track_data['title']} - {track_data['channel']} ({len(download_queues.get(user_id, []))} в очереди)",
+                reply_markup=create_cancel_markup(download_url) # <-- Добавляем кнопку
+            )
+            download_status_messages[user_id][download_url] = status_message # Сохраняем сообщение
+            
+            task = asyncio.create_task(
+                download_track(user_id, track_data, status_message) # Передаем новое сообщение статуса
+            )
+            download_tasks[user_id][download_url] = task
+        except TelegramBadRequest as e:
+             print(f"Failed to send status message (maybe deleted?): {e}")
+             # Если не удалось отправить сообщение, просто пропускаем этот трек
+             continue 
+        except Exception as e:
+            print(f"Error creating download task from queue: {e}")
+            # Удаляем сообщение, если оно было создано и сохранено
+            if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+                del download_status_messages[user_id][download_url]
+            continue
 
 def _blocking_download_and_convert(url, download_opts):
     """Helper function to run blocking yt-dlp download/conversion."""
@@ -205,9 +235,11 @@ def _blocking_download_and_convert(url, download_opts):
         # Perform the download and conversion
         ydl.download([url])
 
-async def download_track(user_id, track_data, callback_message, status_message):
+async def download_track(user_id, track_data, status_message):
+    # --- Изменено: status_message передается как аргумент --- 
     temp_path = None
     loop = asyncio.get_running_loop()
+    download_url = track_data["url"] 
     
     try:
         title = track_data["title"]
@@ -260,10 +292,12 @@ async def download_track(user_id, track_data, callback_message, status_message):
         expected_mp3_path = base_temp_path + '.mp3'
 
         try:
+             # --- Изменено: Редактируем существующее сообщение статуса --- 
             await bot.edit_message_text(
-                f"⏳ качаю трек: {title} - {artist}...",
-                chat_id=callback_message.chat.id,
-                message_id=status_message.message_id
+                f"⏳ качаю трек: {track_data['title']} - {track_data['channel']}...",
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id,
+                reply_markup=create_cancel_markup(download_url) # Оставляем кнопку отмены
             )
             
             print(f"\nStarting download for: {title} - {artist}")
@@ -274,10 +308,10 @@ async def download_track(user_id, track_data, callback_message, status_message):
 
             # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
             await loop.run_in_executor(
-                None,  # Используем стандартный ThreadPoolExecutor
+                None, 
                 _blocking_download_and_convert,
                 url,
-                download_opts # Передаем локальные download_opts
+                download_opts 
             )
             
             print(f"Finished blocking download call for: {title} - {artist}")
@@ -325,27 +359,51 @@ async def download_track(user_id, track_data, callback_message, status_message):
             print(f"Setting metadata for {temp_path}...")
             if set_mp3_metadata(temp_path, title, artist):
                 print(f"Metadata set successfully. Preparing to send {temp_path}.")
-                await bot.delete_message(
-                    chat_id=callback_message.chat.id,
-                    message_id=status_message.message_id
-                )
-                sending_message = await callback_message.answer("📤 отправляю трек...") 
+                try:
+                    await bot.delete_message(
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id
+                    )
+                    if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+                        del download_status_messages[user_id][download_url] # Убираем из хранилища
+                except TelegramBadRequest:
+                    print("Status message already deleted?") 
+                except Exception as del_err:
+                     print(f"Error deleting status message: {del_err}")
+
+                sending_message = await status_message.reply("📤 отправляю трек...") # Используем reply для связи
                 print(f"Sending audio {temp_path}...")
                 await bot.send_audio(
-                    chat_id=callback_message.chat.id,
+                    chat_id=status_message.chat.id,
                     audio=FSInputFile(temp_path),
                     title=title,
                     performer=artist
                 )
                 print(f"Audio sent successfully. Deleting sending message.")
                 await bot.delete_message(
-                    chat_id=callback_message.chat.id,
+                    chat_id=sending_message.chat.id, # Используем chat_id из sending_message
                     message_id=sending_message.message_id
                 )
                 print(f"Finished processing track: {title} - {artist}")
             else:
                 print(f"ERROR: Failed to set metadata for {temp_path}.")
                 raise Exception(f"ошибка при установке метаданных для: {title} - {artist}")
+
+        except asyncio.CancelledError:
+             print(f"Download task for {title} - {artist} ({download_url}) was cancelled.")
+             # --- Изменено: Редактируем сообщение при отмене --- 
+             try:
+                 await bot.edit_message_text(
+                     f"🚫 Загрузка отменена: {track_data['title']} - {track_data['channel']}",
+                     chat_id=status_message.chat.id,
+                     message_id=status_message.message_id,
+                     reply_markup=None # Убираем кнопку
+                 )
+             except TelegramBadRequest:
+                 print("Status message already deleted during cancel?")
+             except Exception as edit_err:
+                 print(f"Error editing message on cancel: {edit_err}")
+             # Не перевыбрасываем CancelledError, просто завершаем задачу
 
         except Exception as e:
             print(f"ERROR during download/processing for {title} - {artist}: {e}")
@@ -355,14 +413,15 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 error_text = error_text[:4000] + "..."
             try:
                 await bot.edit_message_text(
-                    chat_id=callback_message.chat.id,
+                    chat_id=status_message.chat.id,
                     message_id=status_message.message_id,
-                    text=error_text
+                    text=error_text,
+                    reply_markup=None # Убираем кнопку
                 )
             except Exception as edit_error:
                 print(f"Failed to edit message for error: {edit_error}")
                 try:
-                    await callback_message.answer(error_text)
+                    await status_message.reply(error_text)
                 except Exception as send_error:
                     print(f"Failed to send new message for error: {send_error}")
 
@@ -376,25 +435,25 @@ async def download_track(user_id, track_data, callback_message, status_message):
         else:
             print(f"No temporary file found at {temp_path} to clean up, or path is None.")
         
-        # Clean up task tracking and check queue
+        # --- Изменено: Убираем задачу и сообщение статуса --- 
         if user_id in download_tasks:
-            # Use get to avoid KeyError if URL was already removed (e.g., by cancel)
-            if download_tasks[user_id].pop(track_data["url"], None):
-                 print(f"Removed task entry for URL: {track_data['url']}")
-            else:
-                 print(f"Task entry for URL {track_data['url']} not found or already removed.")
-            # Remove user entry if no tasks left
+            download_tasks[user_id].pop(download_url, None)
             if not download_tasks[user_id]:
-                print(f"No tasks left for user {user_id}, removing user entry.")
                 del download_tasks[user_id]
-            else:
-                 print(f"{len(download_tasks[user_id])} tasks remaining for user {user_id}.")
-            # Check queue regardless of success/failure of current task
-            if user_id in download_queues and download_queues[user_id]: 
-                print(f"Processing next item in queue for user {user_id}.")
-                await process_download_queue(user_id)
-            else:
-                 print(f"Download queue for user {user_id} is empty or user not found.")
+        # Убираем сообщение из хранилища, если оно еще там
+        if user_id in download_status_messages:
+            download_status_messages[user_id].pop(download_url, None)
+            if not download_status_messages[user_id]:
+                del download_status_messages[user_id]
+        
+        # Проверяем очередь только если задача не была отменена 
+        # (чтобы не запустить следующую, если нажали /cancel) 
+        # или если она завершилась сама (успешно или с ошибкой)    
+        # Проверка на CancelledError может быть сложной внутри finally, 
+        # поэтому просто проверяем наличие очереди.
+        if user_id in download_queues and download_queues[user_id]:
+             print(f"Processing next item in queue for user {user_id} after task completion/error.")
+             await process_download_queue(user_id)
 
 def set_mp3_metadata(file_path, title, artist):
     try:
@@ -425,7 +484,7 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "�� *команды, если что:*\n"
+        "🎵 *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
@@ -433,84 +492,107 @@ async def cmd_help(message: types.Message):
     )
     await message.answer(help_text, parse_mode="Markdown")
 
-@dp.message(Command("search"))
-async def cmd_search(message: types.Message):
-    if len(message.text.split()) < 2:
-        await message.answer("❌ напиши что-нибудь после /search, плиз.\nнапример: /search coldplay yellow")
-        return
-    
-    query = " ".join(message.text.split()[1:])
-    await message.answer("🔍 ищу треки...")
-    
-    search_id = str(uuid.uuid4())
-    tracks = await search_youtube(query, MAX_TRACKS)
-    
-    if not tracks:
-        await message.answer("❌ чет ничего не нашлось. попробуй другой запрос?")
-        return
-    
-    search_results[search_id] = tracks
-    keyboard = create_tracks_keyboard(tracks, 0, search_id)
-    
-    await message.answer(
-        f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
-        reply_markup=keyboard
-    )
-
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
     user_id = message.from_user.id
-    if user_id in download_tasks and any(not task.done() for task in download_tasks[user_id].values()):
+    cancelled_count = 0
+    active_tasks = []
+
+    # Отмена активных задач
+    if user_id in download_tasks:
         active_tasks = [task for task in download_tasks[user_id].values() if not task.done()]
         for task in active_tasks:
             task.cancel()
-        # Give tasks a moment to cancel
-        await asyncio.sleep(0.1) 
-        # Clear only cancelled/finished tasks or the entire user entry if empty
-        download_tasks[user_id] = {url: task for url, task in download_tasks[user_id].items() if not task.cancelled() and not task.done()}
-        if not download_tasks[user_id]:
-            del download_tasks[user_id]
-        
-        # Also clear the queue for this user
-        if user_id in download_queues:
-            download_queues[user_id].clear()
-            
-        await message.answer("✅ ок, отменил все активные загрузки и почистил очередь.")
+            cancelled_count += 1
+        # Даем время на отмену
+        if active_tasks: 
+            await asyncio.sleep(0.2)
+        # Очищаем словарь задач (завершенные/отмененные удалятся сами в finally)
+        # download_tasks[user_id] = {url: task for url, task in download_tasks[user_id].items() if not task.done()}
+        # if not download_tasks[user_id]:
+        #      del download_tasks[user_id]
+
+    # Очистка очереди
+    queued_count = 0
+    if user_id in download_queues:
+        queued_count = len(download_queues[user_id])
+        # --- Изменено: Нужно отредактировать сообщения для треков в очереди --- 
+        for track_data, _ in download_queues[user_id]: # Игнорируем старое original_message
+            download_url = track_data['url']
+            if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+                status_message = download_status_messages[user_id].pop(download_url)
+                try:
+                    await bot.edit_message_text(
+                        f"🚫 Убрано из очереди: {track_data['title']} - {track_data['channel']}",
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id,
+                        reply_markup=None
+                    )
+                except Exception as e:
+                     print(f"Error editing queued message on /cancel: {e}")
+            else: 
+                print(f"Warning: Status message for queued item {download_url} not found during /cancel.")
+        download_queues[user_id].clear()
+        cancelled_count += queued_count
+
+    # Очистка оставшихся сообщений статуса (если задачи завершились с ошибкой до /cancel)
+    if user_id in download_status_messages:
+         # Создаем копию ключей перед итерацией
+         urls_to_remove = list(download_status_messages[user_id].keys()) 
+         for url in urls_to_remove:
+             if url in download_status_messages[user_id]: # Проверяем еще раз, т.к. могли быть удалены выше
+                status_message = download_status_messages[user_id].pop(url)
+                try:
+                    await bot.delete_message(
+                        chat_id=status_message.chat.id, 
+                        message_id=status_message.message_id
+                    )
+                except Exception as e:
+                    print(f"Error deleting remaining status message on /cancel: {e}")
+         if not download_status_messages[user_id]:
+             del download_status_messages[user_id]
+
+    if cancelled_count > 0:
+        await message.answer(f"✅ ок, отменил {cancelled_count} загрузок и почистил очередь.")
     else:
-        await message.answer("❌ так щас ничего и не качается вроде...")
+        await message.answer("❌ так щас ничего и не качается или в очереди нет.")
 
 @dp.callback_query(F.data.startswith("d_"))
 async def process_download_callback(callback: types.CallbackQuery):
     try:
         track_data = json.loads(base64.b64decode(callback.data[2:]).decode('utf-8'))
         user_id = callback.from_user.id
+        download_url = track_data['url']
         
-        # Check if already downloading this specific track
-        if track_data["url"] in download_tasks.get(user_id, {}):
+        if download_url in download_tasks.get(user_id, {}) or \
+           any(item[0]['url'] == download_url for item in download_queues.get(user_id, [])):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True)
             return
             
-        # Check queue as well
-        if any(item[0]['url'] == track_data['url'] for item in download_queues.get(user_id, [])):
-             await callback.answer("этот трек уже качается или в очереди", show_alert=True)
-             return
-             
         active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
         queue_size = len(download_queues.get(user_id, []))
 
         if active_downloads >= MAX_PARALLEL_DOWNLOADS:
             download_queues[user_id].append((track_data, callback.message))
-            await callback.answer(
-                f"⏳ добавил в очередь ({queue_size+1}-й). качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+            # --- Изменено: Отправляем сообщение о добавлении в очередь с кнопкой --- 
+            status_message = await callback.message.answer(
+                 f"⏳ добавил в очередь ({queue_size+1}-й): {track_data['title']} - {track_data['channel']}",
+                 reply_markup=create_cancel_markup(download_url)
             )
+            download_status_messages[user_id][download_url] = status_message
+            await callback.answer(f"добавил в очередь ({queue_size+1}-й)")
         else:
-            # Using answer instead of sending a new message for initial status
-            status_message = await callback.message.answer(f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}") 
-            task = asyncio.create_task(
-                download_track(user_id, track_data, callback.message, status_message)
+            # --- Изменено: Отправляем сообщение о начале скачивания с кнопкой --- 
+            status_message = await callback.message.answer(
+                f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}",
+                reply_markup=create_cancel_markup(download_url)
             )
-            download_tasks[user_id][track_data["url"]] = task
-            await callback.answer("начал скачивание") # Acknowledge callback
+            download_status_messages[user_id][download_url] = status_message
+            task = asyncio.create_task(
+                download_track(user_id, track_data, status_message)
+            )
+            download_tasks[user_id][download_url] = task
+            await callback.answer("начал скачивание")
             
     except json.JSONDecodeError:
          await callback.message.answer("❌ чет не смог разобрать данные трека. попробуй поискать снова.")
@@ -518,7 +600,7 @@ async def process_download_callback(callback: types.CallbackQuery):
     except Exception as e:
         print(f"Error in process_download_callback: {e}")
         await callback.message.answer(f"❌ ой, ошибка: {str(e)}")
-        await callback.answer() # Acknowledge callback even on error
+        await callback.answer() # Acknowledge callback in all cases, even errors
 
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download_callback_with_index(callback: types.CallbackQuery):
@@ -535,32 +617,37 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         if 0 <= track_index < len(tracks):
             track_data = tracks[track_index]
             user_id = callback.from_user.id
+            download_url = track_data['url']
 
-            # Check if already downloading this specific track
-            if track_data["url"] in download_tasks.get(user_id, {}):
+            if download_url in download_tasks.get(user_id, {}) or \
+               any(item[0]['url'] == download_url for item in download_queues.get(user_id, [])):
                 await callback.answer("этот трек уже качается или в очереди", show_alert=True)
                 return
                 
-            # Check queue as well
-            if any(item[0]['url'] == track_data['url'] for item in download_queues.get(user_id, [])):
-                 await callback.answer("этот трек уже качается или в очереди", show_alert=True)
-                 return
-
             active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
             queue_size = len(download_queues.get(user_id, []))
 
             if active_downloads >= MAX_PARALLEL_DOWNLOADS:
                 download_queues[user_id].append((track_data, callback.message))
-                await callback.answer(
-                    f"⏳ добавил в очередь ({queue_size+1}-й). качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+                # --- Изменено: Отправляем сообщение о добавлении в очередь с кнопкой --- 
+                status_message = await callback.message.answer(
+                     f"⏳ добавил в очередь ({queue_size+1}-й): {track_data['title']} - {track_data['channel']}",
+                     reply_markup=create_cancel_markup(download_url)
                 )
+                download_status_messages[user_id][download_url] = status_message
+                await callback.answer(f"добавил в очередь ({queue_size+1}-й)")
             else:
-                status_message = await callback.message.answer(f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}")
-                task = asyncio.create_task(
-                    download_track(user_id, track_data, callback.message, status_message)
+                # --- Изменено: Отправляем сообщение о начале скачивания с кнопкой --- 
+                status_message = await callback.message.answer(
+                    f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}",
+                    reply_markup=create_cancel_markup(download_url)
                 )
-                download_tasks[user_id][track_data["url"]] = task
-                await callback.answer("начал скачивание") # Acknowledge callback
+                download_status_messages[user_id][download_url] = status_message
+                task = asyncio.create_task(
+                    download_track(user_id, track_data, status_message)
+                )
+                download_tasks[user_id][download_url] = task
+                await callback.answer("начал скачивание")
         else:
             await callback.answer("❌ не нашел трек по этому индексу.", show_alert=True)
             
@@ -623,6 +710,82 @@ async def handle_text(message: types.Message):
         f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
         reply_markup=keyboard
     )
+
+# --- НОВЫЙ ОБРАБОТЧИК для кнопки отмены --- 
+@dp.callback_query(F.data.startswith("cancel_dl_"))
+async def cancel_download_callback(callback: types.CallbackQuery):
+    download_url = callback.data[len("cancel_dl_"):]
+    user_id = callback.from_user.id
+    cancelled = False
+    
+    # Попытка отменить активную задачу
+    if user_id in download_tasks and download_url in download_tasks[user_id]:
+        task = download_tasks[user_id][download_url]
+        if not task.done():
+            task.cancel()
+            cancelled = True
+            print(f"Cancelled active task via button: {download_url}")
+            # Сообщение будет отредактировано в finally блока download_track
+            await callback.answer("загрузка отменена")
+        else:
+             # Задача уже завершилась (успешно/ошибка)
+             await callback.answer("эта загрузка уже завершена")
+             # Удаляем кнопку, если сообщение еще существует
+             if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+                 status_message = download_status_messages[user_id].pop(download_url)
+                 try:
+                      await bot.edit_message_reply_markup(chat_id=status_message.chat.id, 
+                                                          message_id=status_message.message_id, 
+                                                          reply_markup=None)
+                 except Exception as e:
+                      print(f"Error removing markup from completed task message: {e}")
+             return # Выходим, т.к. делать больше нечего
+    else:
+        # Проверяем очередь
+        original_queue_len = len(download_queues.get(user_id, []))
+        # Фильтруем очередь, удаляя нужный элемент
+        download_queues[user_id] = [item for item in download_queues.get(user_id, []) if item[0]['url'] != download_url]
+        
+        if len(download_queues.get(user_id, [])) < original_queue_len:
+            cancelled = True
+            print(f"Removed from queue via button: {download_url}")
+            # Находим и редактируем сообщение статуса
+            if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+                status_message = download_status_messages[user_id].pop(download_url)
+                try:
+                    track_title = "трек" # Дефолт, если не найдем
+                    # Найдем title для сообщения (опционально, можно и без него)
+                    # Это дорогая операция, возможно стоит убрать
+                    # original_data = next((item[0] for item in download_queues.get(user_id, []) if item[0]['url'] == download_url), None)
+                    # if original_data: track_title = original_data.get('title', 'трек')
+                        
+                    await bot.edit_message_text(
+                        f"🚫 Убрано из очереди: {status_message.text.split(': ')[1]}", # Пытаемся извлечь имя из текста сообщения
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id,
+                        reply_markup=None
+                    )
+                    await callback.answer("убрано из очереди")
+                except Exception as e:
+                    print(f"Error editing queued message on cancel: {e}")
+                    await callback.answer("ошибка при обновлении сообщения") # Сообщаем об ошибке
+            else:
+                 print(f"Status message for cancelled queue item {download_url} not found.")
+                 await callback.answer("убрано из очереди (сообщение не найдено)") # Сообщаем об успехе, но без обновления сообщения
+
+    if not cancelled:
+        print(f"Cancel button pressed for {download_url}, but task/queue item not found.")
+        await callback.answer("не удалось найти эту загрузку для отмены", show_alert=True)
+        # Попытаемся удалить кнопку у сообщения, если оно есть
+        if user_id in download_status_messages and download_url in download_status_messages[user_id]:
+             status_message = download_status_messages[user_id].pop(download_url)
+             try:
+                  await bot.edit_message_reply_markup(chat_id=status_message.chat.id, 
+                                                      message_id=status_message.message_id, 
+                                                      reply_markup=None)
+             except Exception as e:
+                  print(f"Error removing markup from lost task message: {e}")
+# --- Конец нового обработчика --- 
 
 async def main():
     await dp.start_polling(bot)
