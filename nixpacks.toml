@@ -1,9 +1,9 @@
 # nixpacks.toml
 # Configuration file for Railway's Nixpacks builder
 
-# Define packages to install using the system package manager (apt in this case)
-[phases.setup]
-aptPkgs = ["ffmpeg"]
+# System packages are now handled by Dockerfile
+# [phases.setup]
+# aptPkgs = ["ffmpeg"]
 
 # Define the command to start the application
 [start]
