@@ -8,19 +8,12 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile,
-    # Добавляем типы для инлайн-режима
-    InlineQuery, InlineQueryResultArticle, InputTextMessageContent,
-    Update # Убедимся, что Update импортирован для allowed_updates
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-import hashlib # Для генерации ID
-import logging # Убедимся, что logging импортирован
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -420,24 +413,10 @@ def set_mp3_metadata(file_path, title, artist):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Добавим обработку параметра из инлайн-режима
-    args = message.text.split()
-    payload = args[1] if len(args) > 1 else None
-    if payload == "inline_search":
-         await message.answer(
-             "👋 Привет! Вижу, ты пришел из инлайн-поиска. \n"
-             "🔍 Просто кидай мне название трека или исполнителя здесь, и я найду его для скачивания!"
-         )
-    elif payload == "inline_empty":
-         await message.answer(
-             "👋 Привет! По твоему инлайн-запросу ничего не нашлось. \n"
-             "🔍 Попробуй другой запрос прямо здесь."
-         )
-    else:
-        await message.answer(
-            "👋 приветики! я бот для скачивания музыки\n\n"
-            "🔍 просто кидай мне название трека или исполнителя и я попробую найти"
-        )
+    await message.answer(
+        "👋 приветики! я бот для скачивания музыки\n\n"
+        "🔍 просто кидай мне название трека или исполнителя и я попробую найти"
+    )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
@@ -645,123 +624,8 @@ async def handle_text(message: types.Message):
         reply_markup=keyboard
     )
 
-# --- Обработчик инлайн-запросов --- 
-
-@dp.inline_query()
-async def inline_search_handler(inline_query: InlineQuery):
-    query = inline_query.query.strip()
-    results = []
-    offset = int(inline_query.offset) if inline_query.offset else 0
-    limit = 20 # Ограничим количество результатов для инлайн-режима (макс 50 по API)
-
-    # Не делаем запрос, если строка пустая
-    if not query:
-        # Можно вернуть пустой список или с предложением перейти в чат
-        await inline_query.answer(
-            results=[], 
-            cache_time=60, 
-            switch_pm_text="Начать поиск...", 
-            switch_pm_parameter="inline_empty_query"
-        )
-        return
-
-    # Ищем треки
-    try:
-        # Ищем чуть больше для пагинации, если нужно
-        search_query = query
-        # Можно добавить кэширование результатов поиска здесь,
-        # чтобы не дергать YT на каждый символ
-
-        tracks = await search_youtube(search_query, max_results=limit + offset) 
-
-        if not tracks:
-             await inline_query.answer(
-                 results=[], 
-                 cache_time=10, 
-                 switch_pm_text="Ничего не найдено...", 
-                 switch_pm_parameter="inline_empty_result"
-            )
-             return
-
-        # Пагинация (простая)
-        paginated_tracks = tracks[offset : offset + limit]
-        logger.info(f"Inline query: '{query}', offset: {offset}, found: {len(tracks)}, showing: {len(paginated_tracks)}")
-
-        for i, track in enumerate(paginated_tracks):
-            # Генерируем уникальный ID для результата
-            result_id = hashlib.md5(f"{inline_query.id}_{track.get('url', '')}_{i}".encode()).hexdigest()
-
-            title = track.get('title', 'Без названия')
-            artist = track.get('channel', 'Неизвестный исполнитель')
-            duration = track.get('duration', 0)
-            duration_str = ""
-            if duration > 0:
-                minutes = int(duration // 60)
-                seconds = int(duration % 60)
-                duration_str = f" ({minutes}:{seconds:02d})"
-
-            # Текст, который будет отправлен при выборе результата
-            input_content = InputTextMessageContent(
-                message_text=f"🎵 Трек: {title} - {artist}"
-                # Можно добавить невидимые данные, например, URL, если бот будет
-                # дальше обрабатывать это сообщение: message_text=f"🎵 {title} - {artist}\n\n[details:{track.get('url', '')}]"
-            )
-
-            results.append(InlineQueryResultArticle(
-                id=result_id,
-                title=f"🎧 {title}",
-                description=f"{artist}{duration_str}",
-                input_message_content=input_content,
-                # thumbnail_url=track.get('thumbnail') # Если search_youtube возвращает миниатюру
-            ))
-
-        # Рассчитываем следующий offset для кнопки "Next"
-        next_offset = str(offset + limit) if len(tracks) > offset + limit else "" # Пустая строка означает конец
-
-        await inline_query.answer(
-            results=results,
-            cache_time=10, # Кэшируем на 10 секунд
-            next_offset=next_offset, # Для кнопки "Next" (пагинация)
-            # Предложение перейти в личку к боту:
-            switch_pm_text="Перейти к боту для скачивания", 
-            switch_pm_parameter="start_from_inline" # Параметр для /start в личке
-        )
-
-    except Exception as e:
-        logger.error(f"Error processing inline query '{query}': {e}", exc_info=True)
-        # В инлайн режиме не стоит показывать ошибку пользователю
-        # Можно попробовать отправить пустой ответ с предложением перейти в ЛС
-        try:
-            await inline_query.answer([], cache_time=5, switch_pm_text="Ошибка поиска...", switch_pm_parameter="inline_error")
-        except Exception:
-            pass # Игнорируем ошибки ответа, если все плохо
-
 async def main():
-    # Регистрация обработчиков
-    # Сначала команды
-    dp.include_router(router) # Если вы используете роутеры
-    # Или регистрируем напрямую:
-    # dp.message.register(cmd_start, Command("start"))
-    # dp.message.register(cmd_help, Command("help"))
-    # dp.message.register(cmd_search, Command("search"))
-    # dp.message.register(cmd_cancel, Command("cancel"))
-
-    # Затем колбэки
-    # dp.callback_query.register(process_download_callback, F.data.startswith("d_"))
-    # dp.callback_query.register(process_download_callback_with_index, F.data.startswith("dl_"))
-    # dp.callback_query.register(process_page_callback, F.data.startswith("page_"))
-    # dp.callback_query.register(process_info_callback, F.data == "info")
-
-    # Регистрируем инлайн-обработчик
-    # dp.inline_query.register(inline_search_handler) # Зарегистрирован через декоратор @dp.inline_query()
-
-    # В конце - обработчик простого текста (если не команда)
-    # dp.message.register(handle_text) # Зарегистрирован через декоратор @dp.message()
-
-    # Запуск поллинга
-    logger.info("Starting bot polling...")
-    # Указываем, что принимаем все типы обновлений, включая inline_query
-    await dp.start_polling(bot, allowed_updates=Update.ALL_TYPES)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main()) 
