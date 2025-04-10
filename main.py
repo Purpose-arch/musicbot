@@ -53,6 +53,7 @@ ydl_opts = {
     # Note: 'audioformat', 'audioquality', 'extractaudio', 'keepvideo'
     # are implicitly handled by the postprocessor or are download-specific.
     # 'outtmpl' is better handled dynamically in download_track.
+    'ffmpeg_location': '/usr/bin/ffmpeg',
 }
 
 def extract_title_and_artist(title):
