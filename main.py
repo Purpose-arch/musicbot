@@ -24,7 +24,7 @@ dp = Dispatcher()
 
 # Константы
 TRACKS_PER_PAGE = 10
-MAX_TRACKS = 150
+MAX_TRACKS = 300
 MAX_RETRIES = 3
 MIN_SONG_DURATION = 45  # Минимальная длительность трека в секундах
 MAX_SONG_DURATION = 720 # Максимальная длительность трека в секундах (12 минут)
@@ -33,7 +33,7 @@ MAX_SONG_DURATION = 720 # Максимальная длительность тр
 download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
-MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество одновременных загрузок
+MAX_PARALLEL_DOWNLOADS = 5  # Максимальное количество одновременных загрузок
 
 # Настройки yt-dlp
 ydl_opts = {
