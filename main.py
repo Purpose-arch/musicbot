@@ -14,7 +14,7 @@ from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-from lyricsmaster import Genius, AzLyrics, LyricWiki
+from lyricsmaster import Genius, AzLyrics, LyricWiki, Musixmatch
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -62,42 +62,36 @@ async def search_lyrics(artist, song_title):
     """Search for lyrics using lyricsmaster providers in priority order."""
     # Список провайдеров в порядке приоритета
     providers = [
-        (Genius(), "Genius"),        # Самое высокое качество
-        (AzLyrics(), "AzLyrics"),    # Средний приоритет
-        (LyricWiki(), "LyricWiki")   # Последний в очереди
+        (Musixmatch(), "Musixmatch"), # Added Musixmatch with high priority
+        (Genius(), "Genius"),        
+        (AzLyrics(), "AzLyrics"),    
+        (LyricWiki(), "LyricWiki")   
     ]
     loop = asyncio.get_running_loop()
     
-    print(f"--- Starting lyrics search for: Artist='{artist}', Title='{song_title}'") # Log input
-    
     # Поиск текста песни в порядке приоритета
     for provider, provider_name in providers:
-        print(f"Attempting search with {provider_name}...")
-        lyrics_result = None # Reset result for each provider
+        print(f"Searching lyrics using {provider_name} for '{song_title}' by '{artist}'...")
         try:
             # Ищем песню асинхронно
-            lyrics_result = await loop.run_in_executor(
+            lyrics = await loop.run_in_executor(
                 None, # Use default executor
                 lambda: provider.get_lyrics(artist, song=song_title)
             )
             
-            if lyrics_result and lyrics_result.lyrics:  # Проверяем, что текст найден
-                lyrics_text = lyrics_result.lyrics.strip()
-                print(f"Lyrics FOUND with {provider_name}. Length: {len(lyrics_text)}")
-                print(f"--- Ending lyrics search early (Success). Found for: Artist='{artist}', Title='{song_title}'")
-                return lyrics_text # Return cleaned lyrics
+            if lyrics and lyrics.lyrics:  # Проверяем, что текст найден
+                print(f"Lyrics found using {provider_name}")
+                return lyrics.lyrics.strip() # Return cleaned lyrics
             else:
-                # This case means the provider ran but didn't find the specific song/lyrics
-                print(f"{provider_name}: Lyrics not found (provider search completed normally). Result object: {lyrics_result}")
+                print(f"{provider_name}: Lyrics not found")
                 
         except Exception as e:
-            # Log the specific error from this provider
-            print(f"Error searching lyrics with {provider_name}: {type(e).__name__} - {e}")
-            # Continue to the next provider
+            # Log the error but continue to the next provider
+            print(f"Error searching lyrics with {provider_name}: {e}")
             continue  
     
     # Если текст не найден ни у одного провайдера
-    print(f"--- Ending lyrics search (Failure). Not found for: Artist='{artist}', Title='{song_title}' using any provider.")
+    print(f"Lyrics not found for '{song_title}' by '{artist}' using any provider.")
     return None
 # --- End Lyrics Search Function ---
 
@@ -414,12 +408,6 @@ async def download_track(user_id, track_data, callback_message, status_message):
                           print("Lyrics truncated for caption.")
                      else:
                          caption = base_caption
-
-                # --- NEW: Log final caption value ---
-                caption_len_bytes = len(caption.encode('utf-8')) if caption else 0
-                print(f"Final caption to be sent (type: {type(caption)}, length: {caption_len_bytes})")
-                print(f"\"{caption}\"") # Print caption in quotes to see whitespace/None
-                # --- End Log final caption value ---
 
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
