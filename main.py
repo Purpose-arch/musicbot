@@ -14,7 +14,7 @@ from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-from lyricsmaster import Genius, AzLyrics, LyricWiki, Musixmatch
+import lyricfetcher
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -57,42 +57,42 @@ ydl_opts = {
     'ffmpeg_location': '/usr/bin/ffmpeg',
 }
 
-# --- NEW: Lyrics Search Function ---
+# --- NEW: Lyrics Search Function using lyricsfetcher ---
 async def search_lyrics(artist, song_title):
-    """Search for lyrics using lyricsmaster providers in priority order."""
-    # Список провайдеров в порядке приоритета
-    providers = [
-        (Musixmatch(), "Musixmatch"), # Added Musixmatch with high priority
-        (Genius(), "Genius"),        
-        (AzLyrics(), "AzLyrics"),    
-        (LyricWiki(), "LyricWiki")   
-    ]
+    """Search for lyrics using lyricsfetcher (AZLyrics scraper)."""
+    print(f"Searching lyrics using lyricsfetcher for '{song_title}' by '{artist}'...")
     loop = asyncio.get_running_loop()
-    
-    # Поиск текста песни в порядке приоритета
-    for provider, provider_name in providers:
-        print(f"Searching lyrics using {provider_name} for '{song_title}' by '{artist}'...")
-        try:
-            # Ищем песню асинхронно
-            lyrics = await loop.run_in_executor(
-                None, # Use default executor
-                lambda: provider.get_lyrics(artist, song=song_title)
-            )
+    try:
+        # lyricsfetcher is synchronous, run in executor
+        lyrics = await loop.run_in_executor(
+            None, # Use default executor
+            lambda: lyricfetcher.get_lyrics('azlyrics', artist, song_title)
+        )
+        
+        if lyrics:
+            print(f"Lyrics found using lyricsfetcher.")
+            # The library seems to return the full text including headers sometimes,
+            # let's try to clean it up a bit. We expect None or string.
+            # Basic cleaning: remove potential AZLyrics header/footer markers
+            cleaned_lyrics = lyrics.replace('"', '') # Remove quotes often surrounding title
+            if "Visit www.azlyrics.com for these lyrics." in cleaned_lyrics:
+                 cleaned_lyrics = cleaned_lyrics.split("Visit www.azlyrics.com for these lyrics.")[0]
+            # Remove potential initial title line if it matches closely
+            lines = cleaned_lyrics.strip().split('\n')
+            if len(lines) > 1 and lines[0].strip().lower() == song_title.lower():
+                 cleaned_lyrics = '\n'.join(lines[1:]).strip()
+            elif len(lines) > 1 and lines[0].strip().lower() == f"{artist.lower()} - {song_title.lower()}":
+                 cleaned_lyrics = '\n'.join(lines[1:]).strip()
+                 
+            return cleaned_lyrics.strip()
+        else:
+            print(f"Lyrics not found using lyricsfetcher.")
+            return None
             
-            if lyrics and lyrics.lyrics:  # Проверяем, что текст найден
-                print(f"Lyrics found using {provider_name}")
-                return lyrics.lyrics.strip() # Return cleaned lyrics
-            else:
-                print(f"{provider_name}: Lyrics not found")
-                
-        except Exception as e:
-            # Log the error but continue to the next provider
-            print(f"Error searching lyrics with {provider_name}: {e}")
-            continue  
-    
-    # Если текст не найден ни у одного провайдера
-    print(f"Lyrics not found for '{song_title}' by '{artist}' using any provider.")
-    return None
+    except Exception as e:
+        # Log the error
+        print(f"Error searching lyrics with lyricsfetcher: {e}")
+        return None
 # --- End Lyrics Search Function ---
 
 def extract_title_and_artist(title):
