@@ -148,9 +148,13 @@ async def search_soundcloud(query, max_results=50):
             for entry_index, entry in enumerate(info['entries']):
                 if entry:
                     duration = entry.get('duration', 0)
-                    # Filter by duration - SoundCloud provides duration in milliseconds
-                    duration_seconds = duration / 1000 if duration else 0
+                    # Duration from scsearch is already in seconds
+                    duration_seconds = duration # Use duration directly
+                    
+                    # Filter by duration
                     if not duration_seconds or not (MIN_SONG_DURATION <= duration_seconds <= MAX_SONG_DURATION):
+                        # Add log for skipped tracks
+                        print(f"[SoundCloud Search Debug] Skipping entry {entry_index} ('{entry.get('title')}') due to duration: {duration_seconds}s (Range: {MIN_SONG_DURATION}-{MAX_SONG_DURATION})")
                         continue # Skip if duration is missing or outside the range
 
                     # SoundCloud often has cleaner titles, but let's try extraction anyway
