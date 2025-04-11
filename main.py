@@ -572,7 +572,7 @@ async def cmd_search(message: types.Message):
     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
 
     await message.answer(
-        f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
@@ -776,7 +776,7 @@ async def handle_text(message: types.Message):
     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
 
     await message.answer(
-        f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
