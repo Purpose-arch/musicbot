@@ -714,7 +714,7 @@ async def handle_text(message: types.Message):
 
     # Treat as search query
     query = message.text
-    searching_message = await message.answer("🔍 ищу треки на...")
+    searching_message = await message.answer("🔍 ищу треки...")
 
     search_id = str(uuid.uuid4())
     # Search both sources concurrently
