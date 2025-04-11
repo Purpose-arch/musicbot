@@ -68,29 +68,36 @@ async def search_lyrics(artist, song_title):
     ]
     loop = asyncio.get_running_loop()
     
+    print(f"--- Starting lyrics search for: Artist='{artist}', Title='{song_title}'") # Log input
+    
     # Поиск текста песни в порядке приоритета
     for provider, provider_name in providers:
-        print(f"Searching lyrics using {provider_name} for '{song_title}' by '{artist}'...")
+        print(f"Attempting search with {provider_name}...")
+        lyrics_result = None # Reset result for each provider
         try:
             # Ищем песню асинхронно
-            lyrics = await loop.run_in_executor(
+            lyrics_result = await loop.run_in_executor(
                 None, # Use default executor
                 lambda: provider.get_lyrics(artist, song=song_title)
             )
             
-            if lyrics and lyrics.lyrics:  # Проверяем, что текст найден
-                print(f"Lyrics found using {provider_name}")
-                return lyrics.lyrics.strip() # Return cleaned lyrics
+            if lyrics_result and lyrics_result.lyrics:  # Проверяем, что текст найден
+                lyrics_text = lyrics_result.lyrics.strip()
+                print(f"Lyrics FOUND with {provider_name}. Length: {len(lyrics_text)}")
+                print(f"--- Ending lyrics search early (Success). Found for: Artist='{artist}', Title='{song_title}'")
+                return lyrics_text # Return cleaned lyrics
             else:
-                print(f"{provider_name}: Lyrics not found")
+                # This case means the provider ran but didn't find the specific song/lyrics
+                print(f"{provider_name}: Lyrics not found (provider search completed normally). Result object: {lyrics_result}")
                 
         except Exception as e:
-            # Log the error but continue to the next provider
-            print(f"Error searching lyrics with {provider_name}: {e}")
+            # Log the specific error from this provider
+            print(f"Error searching lyrics with {provider_name}: {type(e).__name__} - {e}")
+            # Continue to the next provider
             continue  
     
     # Если текст не найден ни у одного провайдера
-    print(f"Lyrics not found for '{song_title}' by '{artist}' using any provider.")
+    print(f"--- Ending lyrics search (Failure). Not found for: Artist='{artist}', Title='{song_title}' using any provider.")
     return None
 # --- End Lyrics Search Function ---
 
@@ -407,6 +414,12 @@ async def download_track(user_id, track_data, callback_message, status_message):
                           print("Lyrics truncated for caption.")
                      else:
                          caption = base_caption
+
+                # --- NEW: Log final caption value ---
+                caption_len_bytes = len(caption.encode('utf-8')) if caption else 0
+                print(f"Final caption to be sent (type: {type(caption)}, length: {caption_len_bytes})")
+                print(f"\"{caption}\"") # Print caption in quotes to see whitespace/None
+                # --- End Log final caption value ---
 
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
