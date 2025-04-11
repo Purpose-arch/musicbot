@@ -9,11 +9,12 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from mutagen.id3 import ID3, TIT2, TPE1, APIC
+from mutagen.id3 import ID3, TIT2, TPE1, APIC, USLT
 from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
+from lyricsmaster import Genius, AzLyrics, LyricWiki
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -55,6 +56,43 @@ ydl_opts = {
     # 'outtmpl' is better handled dynamically in download_track.
     'ffmpeg_location': '/usr/bin/ffmpeg',
 }
+
+# --- NEW: Lyrics Search Function ---
+async def search_lyrics(artist, song_title):
+    """Search for lyrics using lyricsmaster providers in priority order."""
+    # Список провайдеров в порядке приоритета
+    providers = [
+        (Genius(), "Genius"),        # Самое высокое качество
+        (AzLyrics(), "AzLyrics"),    # Средний приоритет
+        (LyricWiki(), "LyricWiki")   # Последний в очереди
+    ]
+    loop = asyncio.get_running_loop()
+    
+    # Поиск текста песни в порядке приоритета
+    for provider, provider_name in providers:
+        print(f"Searching lyrics using {provider_name} for '{song_title}' by '{artist}'...")
+        try:
+            # Ищем песню асинхронно
+            lyrics = await loop.run_in_executor(
+                None, # Use default executor
+                lambda: provider.get_lyrics(artist, song=song_title)
+            )
+            
+            if lyrics and lyrics.lyrics:  # Проверяем, что текст найден
+                print(f"Lyrics found using {provider_name}")
+                return lyrics.lyrics.strip() # Return cleaned lyrics
+            else:
+                print(f"{provider_name}: Lyrics not found")
+                
+        except Exception as e:
+            # Log the error but continue to the next provider
+            print(f"Error searching lyrics with {provider_name}: {e}")
+            continue  
+    
+    # Если текст не найден ни у одного провайдера
+    print(f"Lyrics not found for '{song_title}' by '{artist}' using any provider.")
+    return None
+# --- End Lyrics Search Function ---
 
 def extract_title_and_artist(title):
     """Улучшенное извлечение названия трека и исполнителя"""
@@ -323,19 +361,51 @@ async def download_track(user_id, track_data, callback_message, status_message):
 
             # --- Metadata and Sending ---
             print(f"Setting metadata for {temp_path}...")
-            if set_mp3_metadata(temp_path, title, artist):
-                print(f"Metadata set successfully. Preparing to send {temp_path}.")
+
+            # --- NEW: Search for Lyrics ---
+            print(f"Searching lyrics for {title} - {artist}...")
+            await bot.edit_message_text(
+                f"✏️ ищу текст песни: {title} - {artist}...",
+                chat_id=callback_message.chat.id,
+                message_id=status_message.message_id
+            )
+            lyrics_text = await search_lyrics(artist, title)
+            if lyrics_text:
+                print(f"Lyrics found for {title} - {artist}. Length: {len(lyrics_text)}")
+            else:
+                print(f"Lyrics not found for {title} - {artist}.")
+            # --- End Lyrics Search ---
+
+            # Set metadata (including lyrics if found)
+            if set_mp3_metadata(temp_path, title, artist, lyrics=lyrics_text):
+                print(f"Metadata set successfully (lyrics found: {bool(lyrics_text)}). Preparing to send {temp_path}.")
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
                     message_id=status_message.message_id
                 )
                 sending_message = await callback_message.answer("📤 отправляю трек...") 
                 print(f"Sending audio {temp_path}...")
+
+                # Prepare caption with lyrics (truncated if needed)
+                caption = None
+                if lyrics_text:
+                     # Using f-string for cleaner formatting
+                     base_caption = f"{title} - {artist}\n\n---\n\n{lyrics_text}"
+                     if len(base_caption.encode('utf-8')) > 1024: # Check byte length for Telegram limit
+                          # Truncate based on bytes, ensuring valid UTF-8
+                          truncated_bytes = base_caption.encode('utf-8')[:1020]
+                          # Decode back, ignoring errors in case of split multi-byte char
+                          caption = truncated_bytes.decode('utf-8', errors='ignore') + "\n..."
+                          print("Lyrics truncated for caption.")
+                     else:
+                         caption = base_caption
+
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
                     audio=FSInputFile(temp_path),
                     title=title,
-                    performer=artist
+                    performer=artist,
+                    caption=caption # Add caption with lyrics
                 )
                 print(f"Audio sent successfully. Deleting sending message.")
                 await bot.delete_message(
@@ -396,18 +466,32 @@ async def download_track(user_id, track_data, callback_message, status_message):
             else:
                  print(f"Download queue for user {user_id} is empty or user not found.")
 
-def set_mp3_metadata(file_path, title, artist):
+def set_mp3_metadata(file_path, title, artist, lyrics=None):
     try:
         try:
             audio = ID3(file_path)
-        except:
-            audio = ID3()
+        except Exception as e: # Catch specific ID3 loading error
+            print(f"Warning: Could not load existing ID3 tags from {file_path}, creating new ones. Error: {e}")
+            audio = ID3() # Create new tags if loading failed
         
         audio["TIT2"] = TIT2(encoding=3, text=title)
         audio["TPE1"] = TPE1(encoding=3, text=artist)
+        
+        # --- NEW: Add lyrics metadata ---
+        if lyrics:
+            try:
+                # USLT frame: encoding=3 (UTF-8), lang='eng', desc='', text=lyrics
+                audio["USLT"] = USLT(encoding=3, lang='eng', desc='', text=lyrics)
+                print(f"Added USLT frame with lyrics to {file_path}")
+            except Exception as lyrics_meta_error:
+                 # This except block handles errors specifically from adding USLT
+                 print(f"Warning: Failed to add lyrics metadata (USLT frame) to {file_path}: {lyrics_meta_error}")
+        # --- End lyrics metadata ---
+        
         audio.save(file_path)
         return True
     except Exception as e:
+        # This except block handles errors from the outer try (e.g., saving the file)
         print(f"ошибка при установке метаданных: {e}")
         return False
 
@@ -425,7 +509,7 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "�� *команды, если что:*\n"
+        "🎵 *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
@@ -436,7 +520,7 @@ async def cmd_help(message: types.Message):
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
     if len(message.text.split()) < 2:
-        await message.answer("❌ напиши что-нибудь после /search, плиз.\nнапример: /search coldplay yellow")
+        await message.answer("❌ напиши что-нибудь после /search, плиз\nнапример: /search coldplay yellow")
         return
     
     query = " ".join(message.text.split()[1:])
