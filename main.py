@@ -234,7 +234,7 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
             
         buttons.append([
             InlineKeyboardButton(
-                text=f"🎧 {track['title']} - {track['channel']}{duration_str}{source_indicator}",
+                text=f"🎧 {track['title']} - {track['channel']}{duration_str}",
                 callback_data=callback_data
             )
         ])
@@ -521,7 +521,7 @@ async def cmd_search(message: types.Message):
         return
 
     query = " ".join(message.text.split()[1:])
-    searching_message = await message.answer("🔍 ищу треки на YouTube и SoundCloud...")
+    searching_message = await message.answer("🔍 ищу треки...")
 
     search_id = str(uuid.uuid4())
     # Search both sources concurrently
@@ -559,7 +559,7 @@ async def cmd_search(message: types.Message):
     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
 
     await message.answer(
-        f"🎵 нашел вот {len(combined_results)} треков (YT/SC) по запросу '{query}':",
+        f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
@@ -714,7 +714,7 @@ async def handle_text(message: types.Message):
 
     # Treat as search query
     query = message.text
-    searching_message = await message.answer("🔍 ищу треки на YouTube и SoundCloud...")
+    searching_message = await message.answer("🔍 ищу треки на...")
 
     search_id = str(uuid.uuid4())
     # Search both sources concurrently
@@ -751,7 +751,7 @@ async def handle_text(message: types.Message):
     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
 
     await message.answer(
-        f"🎵 нашел вот {len(combined_results)} треков (YT/SC) по запросу '{query}':",
+        f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
