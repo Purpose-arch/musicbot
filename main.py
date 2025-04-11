@@ -254,7 +254,15 @@ async def download_track(user_id, track_data, callback_message, status_message):
         
         # Создаем БОЛЕЕ безопасное имя файла
         # Заменяем пробелы на _, удаляем все кроме букв/цифр/./_/- 
-        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
+        # safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
+        # NEW: More permissive filename sanitization
+        # Remove problematic characters: / \ : * ? " < > |
+        safe_title = title.replace(" ", "_") # Replace spaces first
+        unsafe_chars = r'[/\\:*?"<>|]'
+        safe_title = "".join(c if c not in unsafe_chars else '_' for c in safe_title)
+        # Remove leading/trailing underscores/dots/hyphens
+        safe_title = safe_title.strip('_.- ')
+
         # Ограничим длину на всякий случай
         safe_title = safe_title[:100] 
         if not safe_title:
@@ -376,9 +384,9 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 print(f"Lyrics not found for {title} - {artist}.")
             # --- End Lyrics Search ---
 
-            # Set metadata (including lyrics if found)
-            if set_mp3_metadata(temp_path, title, artist, lyrics=lyrics_text):
-                print(f"Metadata set successfully (lyrics found: {bool(lyrics_text)}). Preparing to send {temp_path}.")
+            # Set metadata (WITHOUT lyrics)
+            if set_mp3_metadata(temp_path, title, artist):
+                print(f"Metadata set successfully (lyrics were not embedded). Preparing to send {temp_path}.")
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
                     message_id=status_message.message_id
@@ -466,7 +474,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
             else:
                  print(f"Download queue for user {user_id} is empty or user not found.")
 
-def set_mp3_metadata(file_path, title, artist, lyrics=None):
+def set_mp3_metadata(file_path, title, artist):
     try:
         try:
             audio = ID3(file_path)
@@ -477,16 +485,7 @@ def set_mp3_metadata(file_path, title, artist, lyrics=None):
         audio["TIT2"] = TIT2(encoding=3, text=title)
         audio["TPE1"] = TPE1(encoding=3, text=artist)
         
-        # --- NEW: Add lyrics metadata ---
-        if lyrics:
-            try:
-                # USLT frame: encoding=3 (UTF-8), lang='eng', desc='', text=lyrics
-                audio["USLT"] = USLT(encoding=3, lang='eng', desc='', text=lyrics)
-                print(f"Added USLT frame with lyrics to {file_path}")
-            except Exception as lyrics_meta_error:
-                 # This except block handles errors specifically from adding USLT
-                 print(f"Warning: Failed to add lyrics metadata (USLT frame) to {file_path}: {lyrics_meta_error}")
-        # --- End lyrics metadata ---
+        # --- Lyrics metadata section completely removed ---
         
         audio.save(file_path)
         return True
