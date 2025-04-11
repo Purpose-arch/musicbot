@@ -121,6 +121,61 @@ async def search_youtube(query, max_results=50):
         print(f"An error occurred during search: {e}")
         return []
 
+async def search_soundcloud(query, max_results=50):
+    """Searches SoundCloud using yt-dlp."""
+    try:
+        # Use scsearch for SoundCloud
+        search_opts = {
+            **ydl_opts,
+            'default_search': 'scsearch',
+            'max_downloads': max_results,
+            'extract_flat': True,
+        }
+
+        with yt_dlp.YoutubeDL(search_opts) as ydl:
+            info = ydl.extract_info(f"scsearch{max_results}:{query}", download=False)
+            if not info or 'entries' not in info:
+                return []
+
+            results = []
+            for entry in info['entries']:
+                if entry:
+                    duration = entry.get('duration', 0)
+                    # Filter by duration - SoundCloud provides duration in milliseconds
+                    duration_seconds = duration / 1000 if duration else 0
+                    if not duration_seconds or not (MIN_SONG_DURATION <= duration_seconds <= MAX_SONG_DURATION):
+                        continue # Skip if duration is missing or outside the range
+
+                    # SoundCloud often has cleaner titles, but let's try extraction anyway
+                    # 'uploader' seems more reliable for artist on SoundCloud via yt-dlp
+                    raw_title = entry.get('title', 'Unknown Title')
+                    # Basic check: if " - " is present, use that, otherwise keep raw title and use uploader
+                    if ' - ' in raw_title:
+                         parts = raw_title.split(' - ', 1)
+                         title = parts[1].strip() # Assume second part is title
+                         artist = parts[0].strip() # Assume first part is artist
+                    else:
+                         title = raw_title
+                         artist = entry.get('uploader', 'Unknown Artist')
+
+                    # Fallback if title/artist extraction yields poor results
+                    if not title or title == "Unknown Title":
+                        title = raw_title
+                    if not artist or artist == "Unknown Artist":
+                        artist = entry.get('uploader', 'Unknown Artist')
+
+                    results.append({
+                        'title': title,
+                        'channel': artist, # Use 'channel' key for consistency
+                        'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
+                        'duration': duration_seconds,
+                        'source': 'soundcloud' # Add source identifier
+                    })
+            return results
+    except Exception as e:
+        print(f"An error occurred during SoundCloud search: {e}")
+        return []
+
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
     start_idx = page * TRACKS_PER_PAGE
@@ -134,7 +189,9 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
             "title": track['title'],
             "artist": track['channel'],
             "url": track['url'],
-            "search_id": search_id
+            "search_id": search_id,
+            # Ensure source is included if available, default to ''
+            "source": track.get('source', '') 
         }
         
         track_json = json.dumps(track_data, ensure_ascii=False)
@@ -151,9 +208,16 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
         else:
             duration_str = ""
         
+        # Add source indicator to text
+        source_indicator = ""
+        if track.get('source') == 'youtube':
+            source_indicator = " [YT]"
+        elif track.get('source') == 'soundcloud':
+            source_indicator = " [SC]"
+            
         buttons.append([
             InlineKeyboardButton(
-                text=f"🎧 {track['title']} - {track['channel']}{duration_str}",
+                text=f"🎧 {track['title']} - {track['channel']}{duration_str}{source_indicator}",
                 callback_data=callback_data
             )
         ])
@@ -425,7 +489,7 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "�� *команды, если что:*\n"
+        " *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
@@ -438,28 +502,49 @@ async def cmd_search(message: types.Message):
     if len(message.text.split()) < 2:
         await message.answer("❌ напиши что-нибудь после /search, плиз\nнапример: /search coldplay yellow")
         return
-    
+
     query = " ".join(message.text.split()[1:])
-    # Сохраняем сообщение "ищу треки..."
-    searching_message = await message.answer("🔍 ищу треки...")
-    
+    searching_message = await message.answer("🔍 ищу треки на YouTube и SoundCloud...")
+
     search_id = str(uuid.uuid4())
-    tracks = await search_youtube(query, MAX_TRACKS)
-    
-    if not tracks:
-        await message.answer("❌ чет ничего не нашлось. попробуй другой запрос?")
-        # Удаляем сообщение "ищу треки..." если ничего не найдено
+    # Search both sources concurrently
+    max_results_per_source = MAX_TRACKS // 2
+    youtube_results, soundcloud_results = await asyncio.gather(
+        search_youtube(query, max_results_per_source),
+        search_soundcloud(query, max_results_per_source)
+    )
+
+    # Interleave results
+    combined_results = []
+    len_yt = len(youtube_results)
+    len_sc = len(soundcloud_results)
+    max_len = max(len_yt, len_sc)
+    for i in range(max_len):
+        if i < len_yt:
+            # Add source identifier if not already present
+            if 'source' not in youtube_results[i]:
+                 youtube_results[i]['source'] = 'youtube'
+            combined_results.append(youtube_results[i])
+        if i < len_sc:
+            # Ensure source identifier is present
+            if 'source' not in soundcloud_results[i]:
+                 soundcloud_results[i]['source'] = 'soundcloud'
+            combined_results.append(soundcloud_results[i])
+
+    # Limit total results if needed (optional, already limited by source searches)
+
+    if not combined_results:
+        await message.answer("❌ чет ничего не нашлось ни там, ни там. попробуй другой запрос?")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
-    
-    search_results[search_id] = tracks
-    keyboard = create_tracks_keyboard(tracks, 0, search_id)
-    
+
+    search_results[search_id] = combined_results # Store combined results
+    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+
     await message.answer(
-        f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
+        f"🎵 нашел вот {len(combined_results)} треков (YT/SC) по запросу '{query}':",
         reply_markup=keyboard
     )
-    # Удаляем сообщение "ищу треки..." после отправки результатов
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
 @dp.message(Command("cancel"))
@@ -609,29 +694,49 @@ async def handle_text(message: types.Message):
         # Maybe add a hint for unknown commands?
         # await message.answer("хм, не знаю такую команду. попробуй /help")
         return
-    
+
     # Treat as search query
     query = message.text
-    # Сохраняем сообщение "ищу треки..."
-    searching_message = await message.answer("🔍 ищу треки...") 
-    
+    searching_message = await message.answer("🔍 ищу треки на YouTube и SoundCloud...")
+
     search_id = str(uuid.uuid4())
-    tracks = await search_youtube(query, MAX_TRACKS)
-    
-    if not tracks:
-        await message.answer("❌ ничего не нашел по твоему запросу. попробуй еще раз?")
-        # Удаляем сообщение "ищу треки..." если ничего не найдено
+    # Search both sources concurrently
+    max_results_per_source = MAX_TRACKS // 2
+    youtube_results, soundcloud_results = await asyncio.gather(
+        search_youtube(query, max_results_per_source),
+        search_soundcloud(query, max_results_per_source)
+    )
+
+    # Interleave results
+    combined_results = []
+    len_yt = len(youtube_results)
+    len_sc = len(soundcloud_results)
+    max_len = max(len_yt, len_sc)
+    for i in range(max_len):
+        if i < len_yt:
+             if 'source' not in youtube_results[i]:
+                 youtube_results[i]['source'] = 'youtube'
+             combined_results.append(youtube_results[i])
+        if i < len_sc:
+             if 'source' not in soundcloud_results[i]:
+                 soundcloud_results[i]['source'] = 'soundcloud'
+             combined_results.append(soundcloud_results[i])
+
+    # Limit total results if needed
+    # combined_results = combined_results[:MAX_TRACKS]
+
+    if not combined_results:
+        await message.answer("❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
-    
-    search_results[search_id] = tracks
-    keyboard = create_tracks_keyboard(tracks, 0, search_id)
-    
+
+    search_results[search_id] = combined_results # Store combined results
+    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+
     await message.answer(
-        f"🎵 нашел вот {len(tracks)} треков по запросу '{query}':",
+        f"🎵 нашел вот {len(combined_results)} треков (YT/SC) по запросу '{query}':",
         reply_markup=keyboard
     )
-    # Удаляем сообщение "ищу треки..." после отправки результатов
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
 async def main():
