@@ -548,6 +548,19 @@ async def cmd_search(message: types.Message):
                  soundcloud_results[i]['source'] = 'soundcloud'
             combined_results.append(soundcloud_results[i])
 
+    # Prioritize SoundCloud results
+    combined_results = []
+    # Add SoundCloud results first
+    for sc_track in soundcloud_results:
+        if 'source' not in sc_track:
+            sc_track['source'] = 'soundcloud'
+        combined_results.append(sc_track)
+    # Then add YouTube results
+    for yt_track in youtube_results:
+        if 'source' not in yt_track:
+            yt_track['source'] = 'youtube'
+        combined_results.append(yt_track)
+
     # Limit total results if needed (optional, already limited by source searches)
 
     if not combined_results:
@@ -739,8 +752,20 @@ async def handle_text(message: types.Message):
                  soundcloud_results[i]['source'] = 'soundcloud'
              combined_results.append(soundcloud_results[i])
 
+    # Prioritize SoundCloud results
+    combined_results = []
+    # Add SoundCloud results first
+    for sc_track in soundcloud_results:
+         if 'source' not in sc_track:
+             sc_track['source'] = 'soundcloud'
+         combined_results.append(sc_track)
+    # Then add YouTube results
+    for yt_track in youtube_results:
+         if 'source' not in yt_track:
+             yt_track['source'] = 'youtube'
+         combined_results.append(yt_track)
+
     # Limit total results if needed
-    # combined_results = combined_results[:MAX_TRACKS]
 
     if not combined_results:
         await message.answer("❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?")
