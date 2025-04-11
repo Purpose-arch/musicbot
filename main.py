@@ -15,6 +15,7 @@ import yt_dlp
 import uuid
 import time
 import lyricfetcher
+import urllib.parse # Added for URL encoding
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -63,10 +64,15 @@ async def search_lyrics(artist, song_title):
     print(f"Searching lyrics using lyricsfetcher for '{song_title}' by '{artist}'...")
     loop = asyncio.get_running_loop()
     try:
+        # URL-encode artist and title to handle non-ASCII characters
+        encoded_artist = urllib.parse.quote(artist)
+        encoded_title = urllib.parse.quote(song_title)
+        print(f"Encoded search terms: artist='{encoded_artist}', title='{encoded_title}'")
+
         # lyricsfetcher is synchronous, run in executor
         lyrics = await loop.run_in_executor(
             None, # Use default executor
-            lambda: lyricfetcher.get_lyrics('azlyrics', artist, song_title)
+            lambda: lyricfetcher.get_lyrics('azlyrics', encoded_artist, encoded_title)
         )
         
         if lyrics:
