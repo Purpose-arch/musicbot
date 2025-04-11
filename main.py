@@ -133,12 +133,19 @@ async def search_soundcloud(query, max_results=50):
         }
 
         with yt_dlp.YoutubeDL(search_opts) as ydl:
+            print(f"[SoundCloud Search Debug] Querying: scsearch{max_results}:{query}") # Добавим лог запроса
             info = ydl.extract_info(f"scsearch{max_results}:{query}", download=False)
+            
+            # Добавим вывод сырого ответа для отладки
+            print(f"[SoundCloud Search Debug] Raw info received: {info}") 
+            
             if not info or 'entries' not in info:
+                print("[SoundCloud Search Debug] No info or entries found in response.") # Лог пустого ответа
                 return []
 
+            print(f"[SoundCloud Search Debug] Found {len(info['entries'])} potential entries.") # Лог количества найденных записей
             results = []
-            for entry in info['entries']:
+            for entry_index, entry in enumerate(info['entries']):
                 if entry:
                     duration = entry.get('duration', 0)
                     # Filter by duration - SoundCloud provides duration in milliseconds
@@ -171,9 +178,15 @@ async def search_soundcloud(query, max_results=50):
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
                     })
+                else:
+                    # Лог, если запись пустая
+                    print(f"[SoundCloud Search Debug] Entry at index {entry_index} is None or empty.")
+            print(f"[SoundCloud Search Debug] Processed {len(results)} valid entries.") # Лог количества валидных треков
             return results
     except Exception as e:
-        print(f"An error occurred during SoundCloud search: {e}")
+        # Добавим вывод traceback для большей информации об ошибке
+        import traceback
+        print(f"An error occurred during SoundCloud search: {e}\n{traceback.format_exc()}")
         return []
 
 def create_tracks_keyboard(tracks, page=0, search_id=""):
