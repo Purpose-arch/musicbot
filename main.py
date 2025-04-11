@@ -9,13 +9,11 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from mutagen.id3 import ID3, TIT2, TPE1, APIC, USLT
+from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-import lyricfetcher
-import urllib.parse # Added for URL encoding
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -57,49 +55,6 @@ ydl_opts = {
     # 'outtmpl' is better handled dynamically in download_track.
     'ffmpeg_location': '/usr/bin/ffmpeg',
 }
-
-# --- NEW: Lyrics Search Function using lyricsfetcher ---
-async def search_lyrics(artist, song_title):
-    """Search for lyrics using lyricsfetcher (AZLyrics scraper)."""
-    print(f"Searching lyrics using lyricsfetcher for '{song_title}' by '{artist}'...")
-    loop = asyncio.get_running_loop()
-    try:
-        # URL-encode artist and title to handle non-ASCII characters
-        encoded_artist = urllib.parse.quote(artist)
-        encoded_title = urllib.parse.quote(song_title)
-        print(f"Encoded search terms: artist='{encoded_artist}', title='{encoded_title}'")
-
-        # lyricsfetcher is synchronous, run in executor
-        lyrics = await loop.run_in_executor(
-            None, # Use default executor
-            lambda: lyricfetcher.get_lyrics('azlyrics', encoded_artist, encoded_title)
-        )
-        
-        if lyrics:
-            print(f"Lyrics found using lyricsfetcher.")
-            # The library seems to return the full text including headers sometimes,
-            # let's try to clean it up a bit. We expect None or string.
-            # Basic cleaning: remove potential AZLyrics header/footer markers
-            cleaned_lyrics = lyrics.replace('"', '') # Remove quotes often surrounding title
-            if "Visit www.azlyrics.com for these lyrics." in cleaned_lyrics:
-                 cleaned_lyrics = cleaned_lyrics.split("Visit www.azlyrics.com for these lyrics.")[0]
-            # Remove potential initial title line if it matches closely
-            lines = cleaned_lyrics.strip().split('\n')
-            if len(lines) > 1 and lines[0].strip().lower() == song_title.lower():
-                 cleaned_lyrics = '\n'.join(lines[1:]).strip()
-            elif len(lines) > 1 and lines[0].strip().lower() == f"{artist.lower()} - {song_title.lower()}":
-                 cleaned_lyrics = '\n'.join(lines[1:]).strip()
-                 
-            return cleaned_lyrics.strip()
-        else:
-            print(f"Lyrics not found using lyricsfetcher.")
-            return None
-            
-    except Exception as e:
-        # Log the error
-        print(f"Error searching lyrics with lyricsfetcher: {e}")
-        return None
-# --- End Lyrics Search Function ---
 
 def extract_title_and_artist(title):
     """Улучшенное извлечение названия трека и исполнителя"""
@@ -261,15 +216,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
         
         # Создаем БОЛЕЕ безопасное имя файла
         # Заменяем пробелы на _, удаляем все кроме букв/цифр/./_/- 
-        # safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
-        # NEW: More permissive filename sanitization
-        # Remove problematic characters: / \ : * ? " < > |
-        safe_title = title.replace(" ", "_") # Replace spaces first
-        unsafe_chars = r'[/\\:*?"<>|]'
-        safe_title = "".join(c if c not in unsafe_chars else '_' for c in safe_title)
-        # Remove leading/trailing underscores/dots/hyphens
-        safe_title = safe_title.strip('_.- ')
-
+        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
         # Ограничим длину на всякий случай
         safe_title = safe_title[:100] 
         if not safe_title:
@@ -376,51 +323,19 @@ async def download_track(user_id, track_data, callback_message, status_message):
 
             # --- Metadata and Sending ---
             print(f"Setting metadata for {temp_path}...")
-
-            # --- NEW: Search for Lyrics ---
-            print(f"Searching lyrics for {title} - {artist}...")
-            await bot.edit_message_text(
-                f"✏️ ищу текст песни: {title} - {artist}...",
-                chat_id=callback_message.chat.id,
-                message_id=status_message.message_id
-            )
-            lyrics_text = await search_lyrics(artist, title)
-            if lyrics_text:
-                print(f"Lyrics found for {title} - {artist}. Length: {len(lyrics_text)}")
-            else:
-                print(f"Lyrics not found for {title} - {artist}.")
-            # --- End Lyrics Search ---
-
-            # Set metadata (WITHOUT lyrics)
             if set_mp3_metadata(temp_path, title, artist):
-                print(f"Metadata set successfully (lyrics were not embedded). Preparing to send {temp_path}.")
+                print(f"Metadata set successfully. Preparing to send {temp_path}.")
                 await bot.delete_message(
                     chat_id=callback_message.chat.id,
                     message_id=status_message.message_id
                 )
                 sending_message = await callback_message.answer("📤 отправляю трек...") 
                 print(f"Sending audio {temp_path}...")
-
-                # Prepare caption with lyrics (truncated if needed)
-                caption = None
-                if lyrics_text:
-                     # Using f-string for cleaner formatting
-                     base_caption = f"{title} - {artist}\n\n---\n\n{lyrics_text}"
-                     if len(base_caption.encode('utf-8')) > 1024: # Check byte length for Telegram limit
-                          # Truncate based on bytes, ensuring valid UTF-8
-                          truncated_bytes = base_caption.encode('utf-8')[:1020]
-                          # Decode back, ignoring errors in case of split multi-byte char
-                          caption = truncated_bytes.decode('utf-8', errors='ignore') + "\n..."
-                          print("Lyrics truncated for caption.")
-                     else:
-                         caption = base_caption
-
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
                     audio=FSInputFile(temp_path),
                     title=title,
-                    performer=artist,
-                    caption=caption # Add caption with lyrics
+                    performer=artist
                 )
                 print(f"Audio sent successfully. Deleting sending message.")
                 await bot.delete_message(
@@ -485,19 +400,14 @@ def set_mp3_metadata(file_path, title, artist):
     try:
         try:
             audio = ID3(file_path)
-        except Exception as e: # Catch specific ID3 loading error
-            print(f"Warning: Could not load existing ID3 tags from {file_path}, creating new ones. Error: {e}")
-            audio = ID3() # Create new tags if loading failed
+        except:
+            audio = ID3()
         
         audio["TIT2"] = TIT2(encoding=3, text=title)
         audio["TPE1"] = TPE1(encoding=3, text=artist)
-        
-        # --- Lyrics metadata section completely removed ---
-        
         audio.save(file_path)
         return True
     except Exception as e:
-        # This except block handles errors from the outer try (e.g., saving the file)
         print(f"ошибка при установке метаданных: {e}")
         return False
 
@@ -515,7 +425,7 @@ async def cmd_help(message: types.Message):
         "1️⃣ кидаешь мне название трека/исполнителя\n"
         "2️⃣ выбираешь нужный из списка\n"
         "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        "🎵 *команды, если что:*\n"
+        "�� *команды, если что:*\n"
         "/start - начать сначала\n"
         "/help - вот это сообщение\n"
         "/search [запрос] - найти музыку по запросу\n"
