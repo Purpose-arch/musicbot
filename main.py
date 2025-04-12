@@ -561,7 +561,7 @@ def set_mp3_metadata(file_path, title, artist):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 приветики я мультимедиа-бот\n\n"
+        "🐈‍⬛ приветик я медиакот\n\n"
         "🎵 ищу и скачиваю музыку по названию\n"
         "🔗 или просто скинь мне ссылку на видео/аудио и я попробую скачать"
     )
@@ -589,7 +589,7 @@ async def cmd_search(message: types.Message):
         return
     
     query = " ".join(message.text.split()[1:])
-    searching_message = await message.answer("🔍 ищу треки на youtube soundcloud и bandcamp")
+    searching_message = await message.answer("🔍 ищу музыку...")
     
     search_id = str(uuid.uuid4())
     # Search all sources concurrently
@@ -814,7 +814,7 @@ async def handle_text(message: types.Message):
         else:
             # Treat as search query - Indent this whole block
             query = message.text
-            searching_message = await message.answer("🔍 ищу треки на youtube soundcloud и bandcamp...")
+            searching_message = await message.answer("🔍 ищу музыку...")
             search_id = str(uuid.uuid4())
             # Search all sources concurrently
             try:
