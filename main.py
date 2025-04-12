@@ -850,7 +850,7 @@ async def handle_text(message: types.Message):
                 await bot.edit_message_text(
                     chat_id=searching_message.chat.id, 
                     message_id=searching_message.message_id,
-                    text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+                    text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу '{query}' ⬇",
                     reply_markup=keyboard
                 )
             except Exception as e:
@@ -876,7 +876,7 @@ async def handle_url_download(message: types.Message, url: str):
 
 async def handle_group_search(message: types.Message, query: str):
     """Handles 'музыкакот' command in groups."""
-    status_message = await message.reply("🔍 ищу треки на youtube soundcloud и bandcamp...")
+    status_message = await message.reply("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
     
     try:
@@ -911,7 +911,7 @@ async def handle_group_search(message: types.Message, query: str):
         await bot.edit_message_text(
             chat_id=status_message.chat.id,
             message_id=status_message.message_id,
-            text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+            text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу '{query}' ⬇",
         reply_markup=keyboard
     )
 
