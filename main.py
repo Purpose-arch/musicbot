@@ -4,6 +4,8 @@ import tempfile
 import json
 import base64
 import math
+import traceback
+import re
 from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
@@ -14,7 +16,6 @@ from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
-import traceback
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -787,23 +788,26 @@ async def handle_text(message: types.Message):
 
     # --- Group Chat Logic --- 
     if chat_type in ('group', 'supergroup'):
-        if text_lower.startswith("медиакот "):
-            url = message.text.strip()[len("медиакот "):].strip()
-            if url.startswith('http://') or url.startswith('https://'):
-                await handle_url_download(message, url)
-            else:
-                await message.reply("❌ после 'медиакот' нужна ссылка (http://... или https://...)")
-            return
-        elif text_lower.startswith("музыкакот "):
-            query = message.text.strip()[len("музыкакот "):].strip()
+        # Check for 'музыка ' command first
+        if text_lower.startswith("музыка "):
+            query = message.text.strip()[len("музыка "):].strip()
             if query:
                  await handle_group_search(message, query)
             else:
-                 await message.reply("❌ после 'музыкакот' нужно написать запрос для поиска.")
+                 await message.reply("❌ после 'музыка' нужно написать запрос для поиска.")
             return
-        else:
-            # Ignore other messages in groups
-            return 
+        
+        # Then check for any message containing a URL
+        # Use regex to find the first http/https URL in the message text
+        url_match = re.search(r'https?://[^\s]+', message.text)
+        if url_match:
+            url = url_match.group(0)
+            print(f"[Group URL Detect] Found URL: {url} in message: '{message.text}'")
+            await handle_url_download(message, url)
+            return
+        
+        # Ignore other messages in groups
+        return 
             
     # --- Private Chat Logic --- 
     elif chat_type == 'private':
