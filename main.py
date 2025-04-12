@@ -1127,7 +1127,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
          elif 'private' in error_msg_lower:
              error_text_base = f"❌ это приватное видео нужен логин"
          elif 'ip address is blocked' in error_msg_lower: # Check for IP block specifically
-             error_text_base = f"❌ тикток (или другой сайт) заблокировал доступ с ip адреса бота попробуй позже или другую ссылку"
+             error_text_base = f"❌ сервис заблокировал доступ с ip адреса бота попробуй позже или другую ссылку"
              
          error_text = error_text_base.replace(',', '').replace('.', '') # Apply style
          try:
