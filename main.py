@@ -14,6 +14,7 @@ from mutagen.mp3 import MP3
 import yt_dlp
 import uuid
 import time
+import traceback
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -189,7 +190,6 @@ async def search_soundcloud(query, max_results=50):
             return results
     except Exception as e:
         # Добавим вывод traceback для большей информации об ошибке
-        import traceback
         print(f"An error occurred during SoundCloud search: {e}\n{traceback.format_exc()}")
         return []
 
@@ -259,7 +259,6 @@ async def search_bandcamp(query, max_results=50):
             print(f"[Bandcamp Search Debug] Processed {len(results)} valid entries.")
             return results
     except Exception as e:
-        import traceback
         print(f"An error occurred during Bandcamp search: {e}\n{traceback.format_exc()}")
         return []
 
@@ -349,11 +348,7 @@ async def process_download_queue(user_id):
 def _blocking_download_and_convert(url, download_opts):
     """Helper function to run blocking yt-dlp download/conversion."""
     with yt_dlp.YoutubeDL(download_opts) as ydl:
-        # Check info first (optional, but good practice)
-        info = ydl.extract_info(url, download=False)
-        if not info:
-            raise Exception("не удалось получить инфу о видео (в executor)")
-        # Perform the download and conversion
+        # Perform the download (and conversion if specified in opts)
         ydl.download([url])
 
 async def download_track(user_id, track_data, callback_message, status_message):
@@ -981,8 +976,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             # Fallback: send as document if type is unknown
             await bot.send_document(
                 chat_id=original_message.chat.id,
-                document=FSInputFile(actual_downloaded_path),
-                caption=safe_title
+                document=FSInputFile(actual_downloaded_path)
+                # caption=safe_title # REMOVED caption
             )
             
         print(f"[URL Download] Media sent successfully. Deleting sending message.")
@@ -1018,14 +1013,25 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
     finally:
         # --- 5. Cleanup --- 
-        if temp_path and os.path.exists(temp_path):
-            try:
-                print(f"[URL Download] Cleaning up temporary file: {temp_path}")
-                os.remove(temp_path)
-            except Exception as remove_error:
-                print(f"[URL Download] Warning: Failed to remove temp file {temp_path}: {remove_error}")
-        else:
-            print(f"[URL Download] No temporary file found at {temp_path} to clean up, or path is None.")
+        # Attempt cleanup based on base_temp_path, regardless of success
+        print(f"[URL Download] Attempting cleanup for base path: {base_temp_path}")
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        # Also check for common temporary/part extensions
+        possible_extensions.extend([".mp4.part", ".webm.part", ".mkv.part", ".ytdl", ".part"])
+        
+        cleaned_a_file = False
+        for ext in possible_extensions:
+            potential_path = base_temp_path + ext
+            if os.path.exists(potential_path):
+                try:
+                    print(f"[URL Download] Removing found file: {potential_path}")
+                    os.remove(potential_path)
+                    cleaned_a_file = True
+                except Exception as remove_error:
+                    print(f"[URL Download] Warning: Failed to remove temp file {potential_path}: {remove_error}")
+                    
+        if not cleaned_a_file:
+            print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
 
 async def main():
     await dp.start_polling(bot)
