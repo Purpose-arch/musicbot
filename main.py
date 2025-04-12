@@ -322,14 +322,11 @@ async def search_video(query, max_results=50):
         return []
 
 async def search_special(query, max_results=50):
-    """Searches Pornhub and XVideos using yt-dlp.
-    No duration limits applied. Results combined.
+    """Searches Pornhub using yt-dlp's phsearch prefix.
+    No duration limits applied. Note: phsearch can be unstable.
     """
-    # Adjust max_results per source
-    max_per_source = max(1, max_results // 2) 
-    
     ph_results = []
-    xv_results = []
+    max_per_source = max_results # Use full budget for PH
 
     # --- Pornhub Search --- 
     try:
@@ -346,6 +343,7 @@ async def search_special(query, max_results=50):
             'cookiesfrombrowser': ('chrome',), # May help sometimes, optional
         }
         with yt_dlp.YoutubeDL(ph_search_opts) as ydl:
+            # Corrected query format: remove count from the string itself
             print(f"[Special Search Debug] Querying Pornhub: phsearch:{query} (max: {max_per_source})")
             info = ydl.extract_info(f"phsearch:{query}", download=False)
             print(f"[Special Search Debug] Pornhub raw info: {info}")
@@ -363,45 +361,17 @@ async def search_special(query, max_results=50):
                                 'source': 'pornhub' 
                             })
     except Exception as e:
-        print(f"[Special Search Debug] Error during Pornhub search: {e}\n{traceback.format_exc()}")
+        # Catch the specific unsupported scheme error for phsearch too
+        if "Unsupported url scheme" in str(e):
+             print(f"[Special Search Debug] 'phsearch' seems unsupported by current yt-dlp version.")
+        else:
+             print(f"[Special Search Debug] Error during Pornhub search: {e}\n{traceback.format_exc()}")
         
-    # --- XVideos Search --- 
-    try:
-        xv_search_opts = {
-            **ydl_opts,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
-            'default_search': 'xvsearch', 
-            'max_downloads': max_per_source,
-            'extract_flat': True,
-            'postprocessors': [],
-            'quiet': True, 
-            'no_warnings': True,
-            'ignoreerrors': True,
-        }
-        with yt_dlp.YoutubeDL(xv_search_opts) as ydl:
-            print(f"[Special Search Debug] Querying XVideos: xvsearch:{query} (max: {max_per_source})")
-            info = ydl.extract_info(f"xvsearch:{query}", download=False)
-            print(f"[Special Search Debug] XVideos raw info: {info}")
-            if info and 'entries' in info:
-                for entry in info['entries']:
-                    if entry:
-                        url = entry.get('url')
-                        title = entry.get('title', 'Unknown Title')
-                        if url and title != 'Unknown Title':
-                            xv_results.append({
-                                'title': title.strip(),
-                                'channel': entry.get('uploader', 'XVideos'),
-                                'url': url,
-                                'duration': entry.get('duration', 0),
-                                'source': 'xvideos' 
-                            })
-    except Exception as e:
-        print(f"[Special Search Debug] Error during XVideos search: {e}\n{traceback.format_exc()}")
+    # --- XVideos Search REMOVED --- 
         
-    # Combine results (PH first)
-    combined = ph_results + xv_results
-    print(f"[Special Search Debug] Processed {len(combined)} total special entries.")
-    return combined
+    # Return only PH results
+    print(f"[Special Search Debug] Processed {len(ph_results)} total special entries.")
+    return ph_results
 
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
@@ -1095,7 +1065,8 @@ async def handle_text(message: types.Message):
                         print(f"Failed to edit message after video search error: {edit_err}")
                 
             elif search_mode == 'Special':
-                searching_message = await message.answer(f"🌶️ Ищу Special (PH/XV) по запросу '{query}'...", disable_web_page_preview=True)
+                # Updated status message as only PH is searched now
+                searching_message = await message.answer(f"🌶️ Ищу Special (Pornhub) по запросу '{query}'...", disable_web_page_preview=True)
                 search_id = str(uuid.uuid4())
                 try:
                     # Use MAX_TRACKS, search_special will divide it internally
