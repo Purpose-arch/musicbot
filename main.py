@@ -6,9 +6,8 @@ import base64
 import math
 from collections import defaultdict
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, ChatTypeFilter
 from aiogram.filters import Command
-from aiogram.filters.chat_type import ChatTypeFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
