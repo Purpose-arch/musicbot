@@ -193,6 +193,76 @@ async def search_soundcloud(query, max_results=50):
         print(f"An error occurred during SoundCloud search: {e}\n{traceback.format_exc()}")
         return []
 
+async def search_bandcamp(query, max_results=50):
+    """Searches Bandcamp using yt-dlp.
+    Note: yt-dlp's bandcamp search (`bcsearch:`) primarily finds tracks, 
+    but may not always provide accurate artist info directly in search results.
+    It might return album artist instead of track artist sometimes.
+    """
+    try:
+        # Use bcsearch for Bandcamp
+        search_opts = {
+            **ydl_opts,
+            'default_search': 'bcsearch',
+            'max_downloads': max_results,
+            'extract_flat': True,
+        }
+
+        with yt_dlp.YoutubeDL(search_opts) as ydl:
+            print(f"[Bandcamp Search Debug] Querying: bcsearch{max_results}:{query}")
+            info = ydl.extract_info(f"bcsearch{max_results}:{query}", download=False)
+            
+            print(f"[Bandcamp Search Debug] Raw info received: {info}") 
+            
+            if not info or 'entries' not in info:
+                print("[Bandcamp Search Debug] No info or entries found in response.")
+                return []
+
+            print(f"[Bandcamp Search Debug] Found {len(info['entries'])} potential entries.")
+            results = []
+            for entry_index, entry in enumerate(info['entries']):
+                if entry:
+                    # Bandcamp often provides duration directly in seconds
+                    duration = entry.get('duration') 
+                    if not duration or not (MIN_SONG_DURATION <= duration <= MAX_SONG_DURATION):
+                        print(f"[Bandcamp Search Debug] Skipping entry {entry_index} ('{entry.get('title')}') due to duration: {duration}s (Range: {MIN_SONG_DURATION}-{MAX_SONG_DURATION})")
+                        continue
+                        
+                    # Title/Artist extraction for Bandcamp can be tricky via search
+                    title = entry.get('title', 'Unknown Title')
+                    # 'artist' field might be album artist, 'uploader' might be label
+                    artist = entry.get('artist', entry.get('uploader', 'Unknown Artist')) 
+                    
+                    # Sometimes title includes artist "Artist - Track Title"
+                    if ' - ' in title and not entry.get('artist'): # Check if artist wasn't already found
+                        parts = title.split(' - ', 1)
+                        potential_artist = parts[0].strip()
+                        potential_title = parts[1].strip()
+                        # Heuristic: if first part is shorter or looks like an artist name, assume it is
+                        if len(potential_artist) < 30 and len(potential_artist) < len(potential_title):
+                             artist = potential_artist
+                             title = potential_title
+                             
+                    # Ensure title doesn't start with artist if already captured
+                    if artist != 'Unknown Artist' and title.startswith(f"{artist} - "):
+                         title = title[len(artist) + 3:]
+                         
+                    results.append({
+                        'title': title.strip(),
+                        'channel': artist.strip(), # Use 'channel' key for consistency
+                        'url': entry.get('url', ''),
+                        'duration': duration,
+                        'source': 'bandcamp'
+                    })
+                else:
+                    print(f"[Bandcamp Search Debug] Entry at index {entry_index} is None or empty.")
+            print(f"[Bandcamp Search Debug] Processed {len(results)} valid entries.")
+            return results
+    except Exception as e:
+        import traceback
+        print(f"An error occurred during Bandcamp search: {e}\n{traceback.format_exc()}")
+        return []
+
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
     start_idx = page * TRACKS_PER_PAGE
@@ -495,23 +565,28 @@ def set_mp3_metadata(file_path, title, artist):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 приветики! я бот для скачивания музыки\n\n"
-        "🔍 просто кидай мне название трека или исполнителя и я попробую найти"
+        "👋 Приветики! Я мультимедиа-бот.\n\n"
+        "🎵 Ищу и качаю музыку по названию (YouTube, SoundCloud, Bandcamp).\n"
+        "🔗 Или просто скинь мне ссылку на видео/аудио, и я попробую скачать!"
     )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    help_text = (
-        "🎵 *как тут все работает:*\n\n"
-        "1️⃣ кидаешь мне название трека/исполнителя\n"
-        "2️⃣ выбираешь нужный из списка\n"
-        "3️⃣ жмешь кнопку, чтобы скачать\n\n"
-        " *команды, если что:*\n"
-        "/start - начать сначала\n"
-        "/help - вот это сообщение\n"
-        "/search [запрос] - найти музыку по запросу\n"
-        "/cancel - отменить загрузки, которые сейчас идут"
-    )
+    # Using triple quotes for cleaner multiline string
+    help_text = """*Как пользоваться ботом:* 
+
+1️⃣ **Поиск музыки:** Просто напиши название трека или исполнителя. Я поищу на SoundCloud, Bandcamp и YouTube и покажу список.
+
+2️⃣ **Скачивание по ссылке:** Отправь мне прямую ссылку на страницу с видео или аудио (например, с YouTube, SoundCloud, VK, Coub, TikTok и многих других!). Я попытаюсь скачать медиафайл.
+
+*Команды:*
+/start - Показать приветственное сообщение.
+/help - Показать это сообщение.
+/search [запрос] - Искать музыку по запросу.
+/cancel - Отменить активные загрузки (из поиска).
+
+
+_Бот использует yt-dlp для скачивания, поддерживается много сайтов!_"""
     await message.answer(help_text, parse_mode="Markdown")
 
 @dp.message(Command("search"))
@@ -521,47 +596,36 @@ async def cmd_search(message: types.Message):
         return
 
     query = " ".join(message.text.split()[1:])
-    searching_message = await message.answer("🔍 ищу треки...")
+    searching_message = await message.answer("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
 
     search_id = str(uuid.uuid4())
-    # Search both sources concurrently
-    max_results_per_source = MAX_TRACKS // 2
-    youtube_results, soundcloud_results = await asyncio.gather(
+    # Search all sources concurrently
+    max_results_per_source = MAX_TRACKS // 3 # Divide budget
+    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
         search_youtube(query, max_results_per_source),
-        search_soundcloud(query, max_results_per_source)
+        search_soundcloud(query, max_results_per_source),
+        search_bandcamp(query, max_results_per_source) # Add bandcamp search
     )
 
-    # Interleave results
-    combined_results = []
-    len_yt = len(youtube_results)
-    len_sc = len(soundcloud_results)
-    max_len = max(len_yt, len_sc)
-    for i in range(max_len):
-        if i < len_yt:
-            # Add source identifier if not already present
-            if 'source' not in youtube_results[i]:
-                 youtube_results[i]['source'] = 'youtube'
-            combined_results.append(youtube_results[i])
-        if i < len_sc:
-            # Ensure source identifier is present
-            if 'source' not in soundcloud_results[i]:
-                 soundcloud_results[i]['source'] = 'soundcloud'
-            combined_results.append(soundcloud_results[i])
-
-    # Prioritize SoundCloud results
+    # Prioritize SoundCloud -> Bandcamp -> YouTube results
     combined_results = []
     # Add SoundCloud results first
     for sc_track in soundcloud_results:
         if 'source' not in sc_track:
             sc_track['source'] = 'soundcloud'
         combined_results.append(sc_track)
+    # Then add Bandcamp results
+    for bc_track in bandcamp_results:
+         if 'source' not in bc_track:
+             bc_track['source'] = 'bandcamp'
+         combined_results.append(bc_track)
     # Then add YouTube results
     for yt_track in youtube_results:
         if 'source' not in yt_track:
             yt_track['source'] = 'youtube'
         combined_results.append(yt_track)
 
-    # Limit total results if needed (optional, already limited by source searches)
+    # Limit total results if needed
 
     if not combined_results:
         await message.answer("❌ чет ничего не нашлось ни там, ни там. попробуй другой запрос?")
@@ -725,40 +789,39 @@ async def handle_text(message: types.Message):
         # await message.answer("хм, не знаю такую команду. попробуй /help")
         return
 
-    # Treat as search query
+    # --- NEW: Check if the message is a URL --- 
+    # Basic URL check (starts with http/https)
+    # A more robust regex could be used, but this is often sufficient for bots
+    if message.text.strip().startswith(('http://', 'https://')):
+        await handle_url_download(message)
+        return # Stop processing, let the URL handler do its job
+    # --- End of URL Check ---
+    
+    # If not a URL, treat as search query (existing logic)
     query = message.text
-    searching_message = await message.answer("🔍 ищу треки...")
+    searching_message = await message.answer("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
 
     search_id = str(uuid.uuid4())
-    # Search both sources concurrently
-    max_results_per_source = MAX_TRACKS // 2
-    youtube_results, soundcloud_results = await asyncio.gather(
+    # Search all sources concurrently
+    max_results_per_source = MAX_TRACKS // 3 # Divide budget
+    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
         search_youtube(query, max_results_per_source),
-        search_soundcloud(query, max_results_per_source)
+        search_soundcloud(query, max_results_per_source),
+        search_bandcamp(query, max_results_per_source) # Add bandcamp search
     )
 
-    # Interleave results
-    combined_results = []
-    len_yt = len(youtube_results)
-    len_sc = len(soundcloud_results)
-    max_len = max(len_yt, len_sc)
-    for i in range(max_len):
-        if i < len_yt:
-             if 'source' not in youtube_results[i]:
-                 youtube_results[i]['source'] = 'youtube'
-             combined_results.append(youtube_results[i])
-        if i < len_sc:
-             if 'source' not in soundcloud_results[i]:
-                 soundcloud_results[i]['source'] = 'soundcloud'
-             combined_results.append(soundcloud_results[i])
-
-    # Prioritize SoundCloud results
+    # Prioritize SoundCloud -> Bandcamp -> YouTube results
     combined_results = []
     # Add SoundCloud results first
     for sc_track in soundcloud_results:
          if 'source' not in sc_track:
              sc_track['source'] = 'soundcloud'
          combined_results.append(sc_track)
+    # Then add Bandcamp results
+    for bc_track in bandcamp_results:
+         if 'source' not in bc_track:
+             bc_track['source'] = 'bandcamp'
+         combined_results.append(bc_track)
     # Then add YouTube results
     for yt_track in youtube_results:
          if 'source' not in yt_track:
@@ -780,6 +843,189 @@ async def handle_text(message: types.Message):
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+
+async def handle_url_download(message: types.Message):
+    """Handles messages identified as URLs to initiate download."""
+    url = message.text.strip()
+    status_message = await message.answer(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
+    # We don't have a user_id concept here like in queued downloads yet.
+    # For now, download directly without queueing.
+    await download_media_from_url(url, message, status_message)
+
+async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
+    """Downloads media (audio or video) from a direct URL using yt-dlp."""
+    loop = asyncio.get_running_loop()
+    
+    download_uuid = str(uuid.uuid4())
+    temp_dir = tempfile.gettempdir()
+    base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
+    actual_downloaded_path = None # Path to the final downloaded file
+    
+    # Options for general media download (prefer best video+audio, fallback to best single file)
+    media_ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
+        'outtmpl': base_temp_path + '.%(ext)s', # Let ytdl determine extension
+        'quiet': False,
+        'verbose': True,
+        'no_warnings': False,
+        'prefer_ffmpeg': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': True, # Important for trying potentially unsupported URLs
+        'extract_flat': False,
+        'ffmpeg_location': '/usr/bin/ffmpeg',
+        # Add merge output format if separate streams are downloaded
+        'merge_output_format': 'mp4', 
+        # No audio-specific postprocessor here initially
+    }
+
+    try:
+        # --- 1. Get Info (Optional but good for metadata/title) --- 
+        extracted_info = None
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'ignoreerrors': True}) as ydl:
+                extracted_info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                if not extracted_info:
+                    print(f"[URL Download] Could not extract info for {url}")
+        except Exception as info_err:
+            print(f"[URL Download] Error extracting info for {url}: {info_err}")
+            # Continue anyway, try downloading
+
+        # --- 2. Download --- 
+        await bot.edit_message_text(
+            f"⏳ качаю медиа...",
+            chat_id=status_message.chat.id,
+            message_id=status_message.message_id
+        )
+        
+        print(f"\n[URL Download] Starting download for: {url}")
+        print(f"[URL Download] Output template: {media_ydl_opts['outtmpl']}")
+        print(f"[URL Download] Using download options: {media_ydl_opts}")
+
+        # Use the reusable blocking download function
+        await loop.run_in_executor(
+            None, 
+            _blocking_download_and_convert, # Name is slightly inaccurate, but it just runs ydl.download
+            url,
+            media_ydl_opts
+        )
+        print(f"[URL Download] Finished blocking download call for: {url}")
+        
+        # --- 3. Find the actual downloaded file --- 
+        # yt-dlp might create .mp4, .mkv, .webm, .mp3, .m4a etc.
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        for ext in possible_extensions:
+            potential_path = base_temp_path + ext
+            if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
+                actual_downloaded_path = potential_path
+                print(f"[URL Download] Found downloaded file: {actual_downloaded_path}")
+                break
+                
+        if not actual_downloaded_path:
+            # Check for .part file as well
+            part_file = base_temp_path + ".mp4.part" # Common for merged files
+            if os.path.exists(part_file):
+                 print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
+                 # Try renaming? Risky.
+            raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями.")
+        
+        temp_path = actual_downloaded_path # Keep track for cleanup
+        file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
+        print(f"[URL Download] File extension: {file_extension}")
+
+        # --- 4. Determine Type and Send --- 
+        is_audio = file_extension in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        is_video = file_extension in ['.mp4', '.mkv', '.webm', '.mov', '.avi']
+
+        # Use extracted info for title/artist/dimensions if available
+        title = extracted_info.get('title', 'Downloaded Media') if extracted_info else 'Downloaded Media'
+        artist = extracted_info.get('uploader', extracted_info.get('artist', None)) if extracted_info else None
+        duration = extracted_info.get('duration', 0) if extracted_info else 0
+        width = extracted_info.get('width', 0) if extracted_info else 0
+        height = extracted_info.get('height', 0) if extracted_info else 0
+        
+        # Sanitize title slightly
+        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-', ' ') else '_' for c in title).strip()
+        safe_title = safe_title[:150] if safe_title else 'media'
+
+        await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+        sending_message = await original_message.answer(f"📤 отправляю {('аудио' if is_audio else 'видео' if is_video else 'файл')}...")
+        
+        if is_audio:
+            print(f"[URL Download] Sending as Audio: {actual_downloaded_path}")
+            # Try setting metadata for MP3
+            performer = artist if artist else None
+            if file_extension == '.mp3':
+                 set_mp3_metadata(actual_downloaded_path, safe_title, performer if performer else "Unknown Artist")
+                 
+            await bot.send_audio(
+                chat_id=original_message.chat.id,
+                audio=FSInputFile(actual_downloaded_path),
+                title=safe_title,
+                performer=performer,
+                duration=int(duration) if duration else None,
+                # caption=f"Скачано с: {url}" # Optional caption
+            )
+        elif is_video:
+            print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
+            await bot.send_video(
+                chat_id=original_message.chat.id,
+                video=FSInputFile(actual_downloaded_path),
+                duration=int(duration) if duration else None,
+                width=width if width else None,
+                height=height if height else None,
+                caption=safe_title # Use title as caption for video
+                # caption=f"{safe_title}\nСкачано с: {url}" # Optional detailed caption
+            )
+        else:
+            print(f"[URL Download] Sending as Document (unknown type): {actual_downloaded_path}")
+            # Fallback: send as document if type is unknown
+            await bot.send_document(
+                chat_id=original_message.chat.id,
+                document=FSInputFile(actual_downloaded_path),
+                caption=safe_title
+            )
+            
+        print(f"[URL Download] Media sent successfully. Deleting sending message.")
+        await bot.delete_message(chat_id=sending_message.chat.id, message_id=sending_message.message_id)
+        print(f"[URL Download] Finished processing URL: {url}")
+
+    except Exception as e:
+        print(f"ERROR during URL download/processing for {url}: {e}\n{traceback.format_exc()}")
+        error_text = f"❌ блин, ошибка при скачивании/обработке ссылки: {str(e)}"
+        if "Unsupported URL" in str(e):
+             error_text = f"❌ извини, ссылка не поддерживается или не содержит медиа: {url[:60]}..."
+        elif "whoops" in str(e).lower() or "unable to download video data" in str(e).lower(): # Common yt-dlp errors
+             error_text = f"❌ не получилось скачать данные по ссылке. возможно, она битая или требует логина."
+             
+        if len(error_text) > 4000: 
+            error_text = error_text[:4000] + "..."
+        try:
+            await bot.edit_message_text(
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id,
+                text=error_text,
+                disable_web_page_preview=True
+            )
+        except Exception as edit_error:
+            print(f"Failed to edit message for URL download error: {edit_error}")
+            # Try sending a new message if editing fails
+            try:
+                 await original_message.answer(error_text, disable_web_page_preview=True)
+                 # Try deleting the original status message if possible
+                 await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+            except Exception as send_error:
+                 print(f"Failed to send new message for URL download error: {send_error}")
+
+    finally:
+        # --- 5. Cleanup --- 
+        if temp_path and os.path.exists(temp_path):
+            try:
+                print(f"[URL Download] Cleaning up temporary file: {temp_path}")
+                os.remove(temp_path)
+            except Exception as remove_error:
+                print(f"[URL Download] Warning: Failed to remove temp file {temp_path}: {remove_error}")
+        else:
+            print(f"[URL Download] No temporary file found at {temp_path} to clean up, or path is None.")
 
 async def main():
     await dp.start_polling(bot)
