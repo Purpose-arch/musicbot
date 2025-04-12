@@ -347,10 +347,11 @@ async def process_download_queue(user_id):
         download_tasks[user_id][track_data["url"]] = task
 
 def _blocking_download_and_convert(url, download_opts):
-    """Helper function to run blocking yt-dlp download/conversion."""
+    """Helper function to run blocking yt-dlp download and return info dict."""
     with yt_dlp.YoutubeDL(download_opts) as ydl:
-        # Perform the download (and conversion if specified in opts)
-        ydl.download([url])
+        # Use extract_info with download=True to get info dict with filepath
+        info_dict = ydl.extract_info(url, download=True)
+        return info_dict
 
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
@@ -421,7 +422,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
 
             # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
             await loop.run_in_executor(
-                None,  # Используем стандартный ThreadPoolExecutor
+                None, 
                 _blocking_download_and_convert,
                 url,
                 download_opts # Передаем локальные download_opts
@@ -511,7 +512,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 try:
                     await callback_message.answer(error_text)
                 except Exception as send_error:
-                    print(f"Failed to send new message for error: {send_error}")
+                    print(f"[URL Download] Warning: Failed to send new message for error: {send_error}")
 
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -977,41 +978,60 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         )
         
         print(f"\n[URL Download] Starting download for: {url}")
-        print(f"[URL Download] Output template: {media_ydl_opts['outtmpl']}")
         print(f"[URL Download] Using download options: {media_ydl_opts}")
 
         # Use the reusable blocking download function
-        await loop.run_in_executor(
+        download_result_info = await loop.run_in_executor(
             None, 
-            _blocking_download_and_convert, # Name is slightly inaccurate, but it just runs ydl.download
+            _blocking_download_and_convert, # Now returns info dict
             url,
             media_ydl_opts
         )
         print(f"[URL Download] Finished blocking download call for: {url}")
         
         # --- 3. Find the actual downloaded file --- 
-        # yt-dlp might create .mp4, .mkv, .webm, .mp3, .m4a etc.
-        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
-        for ext in possible_extensions:
-            potential_path = base_temp_path + ext
-            if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
-                actual_downloaded_path = potential_path
-                print(f"[URL Download] Found downloaded file: {actual_downloaded_path}")
-                break
-                
+        # Extract filepath from the returned info dict
+        try:
+            # The filepath is usually in the 'requested_downloads' list
+            if download_result_info and download_result_info.get('requested_downloads'):
+                 actual_downloaded_path = download_result_info['requested_downloads'][0]['filepath']
+                 print(f"[URL Download] Found downloaded file via info dict: {actual_downloaded_path}")
+                 if not os.path.exists(actual_downloaded_path) or os.path.getsize(actual_downloaded_path) == 0:
+                      print("[URL Download] Warning: Filepath from info dict does not exist or is empty.")
+                      actual_downloaded_path = None # Reset if invalid
+            else:
+                 print("[URL Download] Warning: 'requested_downloads' not found in download result info.")
+
+        except (KeyError, IndexError, TypeError) as e:
+            print(f"[URL Download] Error extracting filepath from download info: {e}")
+            actual_downloaded_path = None
+
+        # Fallback: If filepath extraction failed, try the old method (less reliable)
         if not actual_downloaded_path:
-            # Check for .part file as well
-            part_file = base_temp_path + ".mp4.part" # Common for merged files
-            if os.path.exists(part_file):
+            print("[URL Download] Falling back to searching for file by extension.")
+            possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+            for ext in possible_extensions:
+                potential_path = base_temp_path + ext
+                if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
+                    actual_downloaded_path = potential_path
+                    print(f"[URL Download] Found downloaded file via fallback search: {actual_downloaded_path}")
+                    break
+                
+        # If still no path found after both methods, raise error
+        if not actual_downloaded_path:
+             # Check for .part file as well
+             part_file = base_temp_path + ".mp4.part" # Common for merged files
+             if os.path.exists(part_file):
                  print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
                  # Try renaming? Risky.
-            raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями")
-        
+             raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями")
+
+        # This part should only execute if actual_downloaded_path WAS found
         temp_path = actual_downloaded_path # Keep track for cleanup
         file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
         print(f"[URL Download] File extension: {file_extension}")
 
-        # --- NEW: Check File Size BEFORE Sending --- 
+        # --- NEW: Check File Size BEFORE Sending ---
         file_size_bytes = os.path.getsize(actual_downloaded_path)
         # Telegram Bot API limit is 50 MB for local file uploads
         telegram_limit_bytes = 50 * 1024 * 1024 
@@ -1109,14 +1129,22 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                  # Try deleting the original status message if possible
                  await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             except Exception as send_error:
-                 print(f"Failed to send new message for error: {send_error}")
+                 print(f"[URL Download] Warning: Failed to send new message for error: {send_error}")
 
     finally:
         # --- 5. Cleanup --- 
-        # Attempt cleanup based on base_temp_path, regardless of success
-        print(f"[URL Download] Attempting cleanup for base path: {base_temp_path}")
+        # First, try cleaning the exact path found (if any)
+        if actual_downloaded_path and os.path.exists(actual_downloaded_path):
+            try:
+                print(f"[URL Download] Cleaning up temporary file: {actual_downloaded_path}")
+                os.remove(actual_downloaded_path)
+            except Exception as remove_error:
+                print(f"[URL Download] Warning: Failed to remove exact temp file {actual_downloaded_path}: {remove_error}")
+        
+        # Also attempt cleanup based on base_temp_path, just in case 
+        # (e.g., if download failed before path was confirmed, or intermediate files left)
+        print(f"[URL Download] Attempting additional cleanup for base path: {base_temp_path}")
         possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
-        # Also check for common temporary/part extensions
         possible_extensions.extend([".mp4.part", ".webm.part", ".mkv.part", ".ytdl", ".part"])
         
         cleaned_a_file = False
