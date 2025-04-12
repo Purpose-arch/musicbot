@@ -346,8 +346,8 @@ async def search_special(query, max_results=50):
             'cookiesfrombrowser': ('chrome',), # May help sometimes, optional
         }
         with yt_dlp.YoutubeDL(ph_search_opts) as ydl:
-            print(f"[Special Search Debug] Querying Pornhub: phsearch{max_per_source}:{query}")
-            info = ydl.extract_info(f"phsearch{max_per_source}:{query}", download=False)
+            print(f"[Special Search Debug] Querying Pornhub: phsearch:{query} (max: {max_per_source})")
+            info = ydl.extract_info(f"phsearch:{query}", download=False)
             print(f"[Special Search Debug] Pornhub raw info: {info}")
             if info and 'entries' in info:
                 for entry in info['entries']:
@@ -379,8 +379,8 @@ async def search_special(query, max_results=50):
             'ignoreerrors': True,
         }
         with yt_dlp.YoutubeDL(xv_search_opts) as ydl:
-            print(f"[Special Search Debug] Querying XVideos: xvsearch{max_per_source}:{query}")
-            info = ydl.extract_info(f"xvsearch{max_per_source}:{query}", download=False)
+            print(f"[Special Search Debug] Querying XVideos: xvsearch:{query} (max: {max_per_source})")
+            info = ydl.extract_info(f"xvsearch:{query}", download=False)
             print(f"[Special Search Debug] XVideos raw info: {info}")
             if info and 'entries' in info:
                 for entry in info['entries']:
