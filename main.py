@@ -7,7 +7,7 @@ import math
 from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, ChatTypeFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
@@ -354,50 +354,6 @@ def _blocking_download_and_convert(url, download_opts):
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
     loop = asyncio.get_running_loop()
-    last_update_time = time.time()
-    last_reported_percent = -1
-    
-    # --- Progress Hook Definition --- 
-    async def progress_hook(d):
-        nonlocal last_update_time, last_reported_percent
-        if d['status'] == 'downloading':
-            current_time = time.time()
-            # Throttle updates: more than 3 seconds passed OR percentage increased by > 5%
-            percent_str = d.get('_percent_str', '').strip().replace('%','')
-            try:
-                percent = float(percent_str)
-            except ValueError:
-                percent = 0
-            
-            if (current_time - last_update_time > 3) or (percent - last_reported_percent > 5):
-                eta_str = d.get('_eta_str', '??:??')
-                speed_str = d.get('_speed_str', '').strip()
-                # Ensure percent_str has the % sign for display
-                display_percent = f"{percent:.1f}%" if percent > 0 else "0%"
-                
-                progress_text = f"⏳ качаю: {display_percent}"
-                if eta_str != '??:??':
-                    progress_text += f" (осталось ~{eta_str})"
-                # if speed_str:
-                #     progress_text += f" [{speed_str}]"
-                    
-                try:
-                    await bot.edit_message_text(
-                        progress_text,
-                        chat_id=status_message.chat.id,
-                        message_id=status_message.message_id
-                    )
-                    last_update_time = current_time
-                    last_reported_percent = percent
-                except Exception as e:
-                    # Ignore MessageNotModified or other potential edit errors silently
-                    # print(f"[Progress Hook] Error editing message: {e}") 
-                    pass # Avoid crashing download due to edit errors
-        elif d['status'] == 'finished':
-             # Optionally update message on finish, though main logic already does
-             pass
-             
-    # --- End Progress Hook ---
     
     try:
         title = track_data["title"]
@@ -444,8 +400,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
             'nocheckcertificate': True,
             'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
             'extract_flat': False, # Нужно для скачивания, а не только для поиска
-            'ffmpeg_location': '/usr/bin/ffmpeg', # Оставляем явное указание пути
-            'progress_hooks': [progress_hook] # Add the hook here
+            'ffmpeg_location': '/usr/bin/ffmpeg' # Оставляем явное указание пути
         }
         
         expected_mp3_path = base_temp_path + '.mp3'
@@ -464,7 +419,6 @@ async def download_track(user_id, track_data, callback_message, status_message):
             print(f"Using download options: {download_opts}")
 
             # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
-            # Передаем хук в опциях
             await loop.run_in_executor(
                 None,  # Используем стандартный ThreadPoolExecutor
                 _blocking_download_and_convert,
@@ -822,7 +776,7 @@ async def process_info_callback(callback: types.CallbackQuery):
     # Simple ack for the info button (page number)
     await callback.answer()
 
-@dp.message()
+@dp.message(ChatTypeFilter('private'))
 async def handle_text(message: types.Message):
     # Ignore commands explicitly
     if message.text.startswith('/'):
@@ -885,15 +839,21 @@ async def handle_text(message: types.Message):
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
-async def handle_url_download(message: types.Message):
-    """Handles messages identified as URLs to initiate download."""
+async def handle_url_download(message: types.Message, reply_to_message_id: int | None = None):
+    """Handles messages identified as URLs to initiate download.
+    Can reply to a specific message if reply_to_message_id is provided.
+    """
     url = message.text.strip()
-    status_message = await message.answer(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
+    
+    # Determine how to send the status message (reply or new message)
+    send_method = message.reply if reply_to_message_id else message.answer
+    
+    status_message = await send_method(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
     # We don't have a user_id concept here like in queued downloads yet.
     # For now, download directly without queueing.
-    await download_media_from_url(url, message, status_message)
+    await download_media_from_url(url, message, status_message, reply_to_message_id=reply_to_message_id)
 
-async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
+async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message, reply_to_message_id: int | None = None):
     """Downloads media (audio or video) from a direct URL using yt-dlp."""
     loop = asyncio.get_running_loop()
     
@@ -901,41 +861,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     temp_dir = tempfile.gettempdir()
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None # Path to the final downloaded file
-    last_update_time = time.time()
-    last_reported_percent = -1
-
-    # --- Progress Hook Definition (similar to download_track) --- 
-    async def progress_hook(d):
-        nonlocal last_update_time, last_reported_percent
-        if d['status'] == 'downloading':
-            current_time = time.time()
-            percent_str = d.get('_percent_str', '').strip().replace('%','')
-            try:
-                percent = float(percent_str)
-            except ValueError:
-                percent = 0
-            
-            if (current_time - last_update_time > 3) or (percent - last_reported_percent > 5):
-                eta_str = d.get('_eta_str', '??:??')
-                display_percent = f"{percent:.1f}%" if percent > 0 else "0%"
-                progress_text = f"⏳ качаю: {display_percent}"
-                if eta_str != '??:??':
-                    progress_text += f" (осталось ~{eta_str})"
-                try:
-                    await bot.edit_message_text(
-                        progress_text,
-                        chat_id=status_message.chat.id,
-                        message_id=status_message.message_id
-                    )
-                    last_update_time = current_time
-                    last_reported_percent = percent
-                except Exception as e:
-                    pass # Ignore edit errors
-        elif d['status'] == 'finished':
-             pass
-             
-    # --- End Progress Hook ---
-
+    
     # Options for general media download (prefer best video+audio, fallback to best single file)
     media_ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
@@ -951,7 +877,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Add merge output format if separate streams are downloaded
         'merge_output_format': 'mp4', 
         # No audio-specific postprocessor here initially
-        'progress_hooks': [progress_hook] # Add the hook here
     }
 
     try:
@@ -1008,6 +933,17 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
         print(f"[URL Download] File extension: {file_extension}")
 
+        # --- NEW: Check File Size BEFORE Sending --- 
+        file_size_bytes = os.path.getsize(actual_downloaded_path)
+        # Telegram Bot API limit is 50 MB for local file uploads
+        telegram_limit_bytes = 50 * 1024 * 1024 
+        if file_size_bytes > telegram_limit_bytes:
+             file_size_mb = file_size_bytes / (1024 * 1024)
+             print(f"[URL Download] ERROR: File too large ({file_size_mb:.2f} MB) for Telegram limit (50 MB).")
+             raise Exception(f"скачанный файл слишком большой ({file_size_mb:.1f} МБ). Телеграм разрешает ботам загружать файлы до 50 МБ.")
+        else:
+             print(f"[URL Download] File size ({file_size_bytes / (1024 * 1024):.2f} MB) is within Telegram limit.")
+             
         # --- 4. Determine Type and Send --- 
         is_audio = file_extension in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
         is_video = file_extension in ['.mp4', '.mkv', '.webm', '.mov', '.avi']
@@ -1039,7 +975,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 title=safe_title,
                 performer=performer,
                 duration=int(duration) if duration else None,
-                # caption=f"Скачано с: {url}" # Optional caption
+                reply_to_message_id=reply_to_message_id
             )
         elif is_video:
             print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
@@ -1049,16 +985,15 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 duration=int(duration) if duration else None,
                 width=width if width else None,
                 height=height if height else None,
-                # caption=safe_title # REMOVED caption
-                # caption=f"{safe_title}\nСкачано с: {url}" # Optional detailed caption
+                reply_to_message_id=reply_to_message_id
             )
         else:
             print(f"[URL Download] Sending as Document (unknown type): {actual_downloaded_path}")
             # Fallback: send as document if type is unknown
             await bot.send_document(
                 chat_id=original_message.chat.id,
-                document=FSInputFile(actual_downloaded_path)
-                # caption=safe_title # REMOVED caption
+                document=FSInputFile(actual_downloaded_path),
+                reply_to_message_id=reply_to_message_id
             )
             
         print(f"[URL Download] Media sent successfully. Deleting sending message.")
@@ -1113,6 +1048,115 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     
         if not cleaned_a_file:
             print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
+
+# --- NEW Group Handlers ---
+
+@dp.message(ChatTypeFilter(['group', 'supergroup']), F.text.lower().startswith("медиакот "))
+async def handle_group_mediacat(message: types.Message):
+    """Handles 'медиакот [URL]' command in groups."""
+    command_prefix = "медиакот "
+    url_candidate = message.text[len(command_prefix):].strip()
+    
+    # Basic check if it looks like a URL
+    if url_candidate.startswith(('http://', 'https://')):
+         # We need to create a temporary message object for handle_url_download
+         # because it expects the URL to be the entire message.text
+         # Alternatively, refactor handle_url_download to take URL directly
+         # Let's go with the temporary message for now
+         
+         # Create a pseudo-message with only the URL as text
+         pseudo_message = types.Message(
+             message_id=message.message_id, # Keep original ID for context?
+             chat=message.chat,
+             from_user=message.from_user,
+             date=message.date,
+             text=url_candidate # Only the URL
+             # other fields might be needed? Test.
+         )
+         
+         # Call the handler, passing the original message_id to reply to
+         await handle_url_download(pseudo_message, reply_to_message_id=message.message_id)
+    else:
+        await message.reply("❌ похоже, это не ссылка. пример: `медиакот https://...`", parse_mode="Markdown")
+
+@dp.message(ChatTypeFilter(['group', 'supergroup']), F.text.lower().startswith("музыкакот "))
+async def handle_group_musiccat(message: types.Message):
+    """Handles 'музыкакот [query]' command in groups."""
+    command_prefix = "музыкакот "
+    query = message.text[len(command_prefix):].strip()
+    
+    if not query:
+        await message.reply("❌ укажи поисковый запрос после `музыкакот `", parse_mode="Markdown")
+        return
+        
+    searching_message = await message.reply("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
+
+    search_id = str(uuid.uuid4())
+    # Search all sources concurrently
+    max_results_per_source = MAX_TRACKS // 3 # Divide budget
+    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+        search_youtube(query, max_results_per_source),
+        search_soundcloud(query, max_results_per_source),
+        search_bandcamp(query, max_results_per_source) # Add bandcamp search
+    )
+
+    # Prioritize SoundCloud -> Bandcamp -> YouTube results
+    combined_results = []
+    # Add SoundCloud results first
+    for sc_track in soundcloud_results:
+         if 'source' not in sc_track:
+             sc_track['source'] = 'soundcloud'
+         combined_results.append(sc_track)
+    # Then add Bandcamp results
+    for bc_track in bandcamp_results:
+         if 'source' not in bc_track:
+             bc_track['source'] = 'bandcamp'
+         combined_results.append(bc_track)
+    # Then add YouTube results
+    for yt_track in youtube_results:
+         if 'source' not in yt_track:
+             yt_track['source'] = 'youtube'
+         combined_results.append(yt_track)
+
+    # Limit total results if needed
+    # combined_results = combined_results[:MAX_TRACKS]
+
+    if not combined_results:
+        # Edit the searching message to show not found
+        try:
+             await bot.edit_message_text(
+                 "❌ ничего не нашел по твоему запросу ни там, ни там.",
+                 chat_id=searching_message.chat.id,
+                 message_id=searching_message.message_id
+             )
+        except Exception as edit_error:
+             print(f"Failed to edit 'searching' message for group not found: {edit_error}")
+             # Send a new reply if editing failed
+             await message.reply("❌ ничего не нашел по твоему запросу ни там, ни там.")
+        return
+
+    search_results[search_id] = combined_results # Store combined results
+    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+    
+    # Send results as a reply to the original command
+    try:
+        await message.reply(
+            f"🎵 вот что я нашел по запросу «{query}» ({len(combined_results)} треков):",
+            reply_markup=keyboard
+        )
+        # Delete the "searching..." message
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+    except Exception as send_error:
+        print(f"Error sending group search results or deleting status: {send_error}")
+        # Try sending without deleting status if first attempt failed
+        try:
+             await message.reply(
+                f"🎵 вот что я нашел по запросу «{query}» ({len(combined_results)} треков) (ошибка удаления статуса):",
+                reply_markup=keyboard
+            )
+        except Exception as final_send_error:
+             print(f"FINAL Error sending group search results: {final_send_error}")
+             await message.reply(f"❌ Ошибка при отправке результатов поиска: {final_send_error}")
 
 async def main():
     await dp.start_polling(bot)
