@@ -10,8 +10,7 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, ReplyKeyboardRemove
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
@@ -36,10 +35,7 @@ MAX_SONG_DURATION = 720 # Максимальная длительность тр
 download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
-MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество одновременных загрузок
-
-# Хранилище настроек пользователей {user_id: search_mode}
-user_settings = defaultdict(lambda: 'Музыка') # Default mode is 'Музыка'
+MAX_PARALLEL_DOWNLOADS = 5  # Максимальное количество одновременных загрузок
 
 # Настройки yt-dlp
 ydl_opts = {
@@ -183,7 +179,7 @@ async def search_soundcloud(query, max_results=50):
 
                     results.append({
                         'title': title,
-                        'channel': artist.strip(), # Use 'channel' key for consistency
+                        'channel': artist, # Use 'channel' key for consistency
                         'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
@@ -267,112 +263,6 @@ async def search_bandcamp(query, max_results=50):
         print(f"An error occurred during Bandcamp search: {e}\n{traceback.format_exc()}")
         return []
 
-async def search_video(query, max_results=50):
-    """Searches YouTube for videos using yt-dlp.
-    No duration limits applied.
-    """
-    try:
-        search_opts = {
-            **ydl_opts,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best', # General video format preference
-            'default_search': 'ytsearch',
-            'max_downloads': max_results,
-            'extract_flat': True, # Keep flat for faster searching
-            'postprocessors': [], # No audio extraction needed
-            'quiet': True, # Keep search quiet
-            'no_warnings': True,
-        }
-        
-        with yt_dlp.YoutubeDL(search_opts) as ydl:
-            print(f"[Video Search Debug] Querying: ytsearch{max_results}:{query}")
-            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-            
-            print(f"[Video Search Debug] Raw info received: {info}") 
-            
-            if not info or 'entries' not in info:
-                print("[Video Search Debug] No info or entries found.")
-                return []
-            
-            print(f"[Video Search Debug] Found {len(info['entries'])} potential entries.")
-            results = []
-            for entry in info['entries']:
-                if entry:
-                    # Basic info extraction
-                    title = entry.get('title', 'Unknown Title')
-                    channel = entry.get('channel', entry.get('uploader', 'Unknown Uploader'))
-                    url = entry.get('url', '')
-                    duration = entry.get('duration', 0) # Keep duration info
-                    
-                    # Skip if essential info is missing
-                    if not url or title == 'Unknown Title': 
-                        continue
-                        
-                    results.append({
-                        'title': title.strip(),
-                        'channel': channel.strip(),
-                        'url': url,
-                        'duration': duration,
-                        'source': 'youtube_video' # Differentiate source if needed
-                    })
-            print(f"[Video Search Debug] Processed {len(results)} valid video entries.")
-            return results
-    except Exception as e:
-        import traceback
-        print(f"An error occurred during Video search: {e}\n{traceback.format_exc()}")
-        return []
-
-async def search_special(query, max_results=50):
-    """Searches Pornhub using yt-dlp's phsearch prefix.
-    No duration limits applied. Note: phsearch can be unstable.
-    """
-    ph_results = []
-    max_per_source = max_results # Use full budget for PH
-
-    # --- Pornhub Search --- 
-    try:
-        ph_search_opts = {
-            **ydl_opts,
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
-            'default_search': 'phsearch', 
-            'max_downloads': max_per_source,
-            'extract_flat': True,
-            'postprocessors': [],
-            'quiet': True, 
-            'no_warnings': True,
-            'ignoreerrors': True, # Important for these sites
-            'cookiesfrombrowser': ('chrome',), # May help sometimes, optional
-        }
-        with yt_dlp.YoutubeDL(ph_search_opts) as ydl:
-            # Corrected query format: remove count from the string itself
-            print(f"[Special Search Debug] Querying Pornhub: phsearch:{query} (max: {max_per_source})")
-            info = ydl.extract_info(f"phsearch:{query}", download=False)
-            print(f"[Special Search Debug] Pornhub raw info: {info}")
-            if info and 'entries' in info:
-                for entry in info['entries']:
-                    if entry:
-                        url = entry.get('url')
-                        title = entry.get('title', 'Unknown Title')
-                        if url and title != 'Unknown Title':
-                            ph_results.append({
-                                'title': title.strip(),
-                                'channel': entry.get('uploader', 'Pornhub'), # Less reliable field
-                                'url': url,
-                                'duration': entry.get('duration', 0),
-                                'source': 'pornhub' 
-                            })
-    except Exception as e:
-        # Catch the specific unsupported scheme error for phsearch too
-        if "Unsupported url scheme" in str(e):
-             print(f"[Special Search Debug] 'phsearch' seems unsupported by current yt-dlp version.")
-        else:
-             print(f"[Special Search Debug] Error during Pornhub search: {e}\n{traceback.format_exc()}")
-        
-    # --- XVideos Search REMOVED --- 
-        
-    # Return only PH results
-    print(f"[Special Search Debug] Processed {len(ph_results)} total special entries.")
-    return ph_results
-
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
     start_idx = page * TRACKS_PER_PAGE
@@ -450,7 +340,7 @@ async def process_download_queue(user_id):
     while download_queues[user_id] and len(download_tasks[user_id]) < MAX_PARALLEL_DOWNLOADS:
         track_data, callback_message = download_queues[user_id].pop(0)
         # Slightly informal status message
-        status_message = await callback_message.answer(f"⏳ ставлю в очередь на скачивание: {track_data['title']} - {track_data['channel']}\n...") 
+        status_message = await callback_message.answer(f"⏳ ставлю в очередь на скачивание {track_data['title']} - {track_data['channel']}")
         task = asyncio.create_task(
             download_track(user_id, track_data, callback_message, status_message)
         )
@@ -504,9 +394,9 @@ async def download_track(user_id, track_data, callback_message, status_message):
             # ВАЖНО: outtmpl должен включать полный путь и расширение .%(ext)s 
             # чтобы ytdl сам обработал имя до и после конвертации
             'outtmpl': base_temp_path + '.%(ext)s', 
-            'quiet': False, # Отключаем quiet
-            'verbose': True, # Включаем подробный лог для отладки
-            'no_warnings': False,
+            'quiet': True, # Keep quiet for track download
+            'verbose': False, # Keep quiet for track download
+            'no_warnings': True, # Keep quiet for track download
             'prefer_ffmpeg': True,
             'nocheckcertificate': True,
             'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
@@ -518,7 +408,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
 
         try:
             await bot.edit_message_text(
-                f"⏳ качаю трек: {title} - {artist}...",
+                f"⏳ качаю трек {title} - {artist}",
                 chat_id=callback_message.chat.id,
                 message_id=status_message.message_id
             )
@@ -555,14 +445,14 @@ async def download_track(user_id, track_data, callback_message, status_message):
                          except OSError as e:
                              print(f"Could not remove intermediate file {potential_path}: {e}")
                          break
-                raise Exception(f"файл {expected_mp3_path} не создался после скачивания/конвертации.")
+                raise Exception(f"файл {expected_mp3_path} не создался после скачивания/конвертации")
             
             temp_path = expected_mp3_path 
             print(f"Confirmed MP3 file exists at: {temp_path}")
             
             if os.path.getsize(temp_path) == 0:
                 print(f"ERROR: Downloaded file {temp_path} is empty.")
-                raise Exception("скачанный файл пустой, чет не то")
+                raise Exception("скачанный файл пустой чет не то")
             
             print(f"File size: {os.path.getsize(temp_path)} bytes")
 
@@ -572,11 +462,11 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 audio_check = MP3(temp_path) 
                 if not audio_check.info.length > 0:
                      print(f"ERROR: MP3 file {temp_path} loaded but has zero length/duration.")
-                     raise Exception("файл MP3 скачался, но похоже битый (нулевая длина)")
+                     raise Exception("файл mp3 скачался но похоже битый (нулевая длина)")
                 print(f"MP3 Validation PASSED for {temp_path}, duration: {audio_check.info.length}s")
             except Exception as validation_error:
                 print(f"ERROR: MP3 Validation FAILED for {temp_path}: {validation_error}")
-                raise Exception(f"скачанный файл не является валидным MP3: {validation_error}")
+                raise Exception(f"скачанный файл не является валидным mp3 {validation_error}")
 
             # --- Metadata and Sending ---
             print(f"Setting metadata for {temp_path}...")
@@ -586,7 +476,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
                     chat_id=callback_message.chat.id,
                     message_id=status_message.message_id
                 )
-                sending_message = await callback_message.answer("📤 отправляю трек...") 
+                sending_message = await callback_message.answer("📤 отправляю трек")
                 print(f"Sending audio {temp_path}...")
                 await bot.send_audio(
                     chat_id=callback_message.chat.id,
@@ -602,14 +492,14 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 print(f"Finished processing track: {title} - {artist}")
             else:
                 print(f"ERROR: Failed to set metadata for {temp_path}.")
-                raise Exception(f"ошибка при установке метаданных для: {title} - {artist}")
+                raise Exception(f"ошибка при установке метаданных для {title} - {artist}")
 
         except Exception as e:
             print(f"ERROR during download/processing for {title} - {artist}: {e}")
             # Catch errors from download, file checks, or metadata setting
-            error_text = f"❌ блин, ошибка: {str(e)}"
+            error_text = f"❌ блин ошибка {str(e).lower()}"
             if len(error_text) > 4000: 
-                error_text = error_text[:4000] + "..."
+                error_text = error_text[:3995] + "..."
             try:
                 await bot.edit_message_text(
                     chat_id=callback_message.chat.id,
@@ -668,88 +558,38 @@ def set_mp3_metadata(file_path, title, artist):
         print(f"ошибка при установке метаданных: {e}")
         return False
 
-# --- Keyboard Builders ---
-
-def get_settings_keyboard(current_mode: str):
-    builder = ReplyKeyboardBuilder()
-    modes = ["Музыка", "Видео", "Special"]
-    for mode in modes:
-        prefix = "✅ " if mode == current_mode else ""
-        builder.button(text=f"{prefix}{mode}")
-    builder.adjust(3) # 3 buttons per row
-    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 Приветики! Я мультимедиа-бот.\n\n"
-        "🎵 Ищу и качаю музыку по названию (YouTube, SoundCloud, Bandcamp).\n"
-        "🔗 Или просто скинь мне ссылку на видео/аудио, и я попробую скачать!"
+        "👋 приветики я мультимедиа-бот\n\n"
+        "🎵 ищу и скачиваю музыку по названию\n"
+        "🔗 или просто скинь мне ссылку на видео/аудио и я попробую скачать"
     )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     # Using triple quotes for cleaner multiline string
-    help_text = """*Как пользоваться ботом:* 
+    help_text = """*как пользоваться ботом* 
 
-1️⃣ **Поиск музыки:** Просто напиши название трека или исполнителя. Я поищу на SoundCloud, Bandcamp и YouTube и покажу список.
+1️⃣ **поиск музыки** просто напиши название трека или исполнителя я поищу на soundcloud bandcamp и youtube и покажу список
 
-2️⃣ **Скачивание по ссылке:** Отправь мне прямую ссылку на страницу с видео или аудио (например, с YouTube, SoundCloud, VK, Coub, TikTok и многих других!). Я попытаюсь скачать медиафайл.
+2️⃣ **скачивание по ссылке** отправь мне прямую ссылку на страницу с видео или аудио (например с youtube soundcloud vk insta tiktok и многих других) я попытаюсь скачать медиа
 
-*Команды:*
-/start - Показать приветственное сообщение.
-/help - Показать это сообщение.
-/search [запрос] - Искать музыку по запросу.
-/cancel - Отменить активные загрузки (из поиска).
-
-
-_Бот использует yt-dlp для скачивания, поддерживается много сайтов!_"""
+*команды*
+/start - показать приветственное сообщение
+/help - показать это сообщение
+/search [запрос] - искать музыку по запросу
+/cancel - отменить активные загрузки (из поиска)"""
     await message.answer(help_text, parse_mode="Markdown")
-
-@dp.message(Command("settings"))
-async def cmd_settings(message: types.Message):
-    if message.chat.type != 'private':
-        await message.reply("Настройки доступны только в личных сообщениях.")
-        return
-        
-    user_id = message.from_user.id
-    current_mode = user_settings[user_id]
-    keyboard = get_settings_keyboard(current_mode)
-    await message.answer(
-        f"⚙️ Выбери режим поиска. Текущий: *{current_mode}*", 
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
-
-# --- Settings Handler ---
-@dp.message(F.text.startswith(("✅ Музыка", "Музыка", "✅ Видео", "Видео", "✅ Special", "Special"))) 
-async def handle_settings_choice(message: types.Message):
-    if message.chat.type != 'private': # Settings only in private
-        return 
-        
-    user_id = message.from_user.id
-    chosen_mode_text = message.text.replace("✅ ", "").strip()
-    
-    valid_modes = ["Музыка", "Видео", "Special"]
-    if chosen_mode_text in valid_modes:
-        user_settings[user_id] = chosen_mode_text
-        await message.answer(
-            f"✅ Режим поиска изменен на: *{chosen_mode_text}*", 
-            reply_markup=ReplyKeyboardRemove(), # Remove the settings keyboard
-            parse_mode="Markdown"
-        )
-    else:
-        # Should not happen with reply keyboard, but handle anyway
-        await message.answer("Неизвестный режим. Используй команду /settings.")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
     if len(message.text.split()) < 2:
-        await message.answer("❌ напиши что-нибудь после /search, плиз\nнапример: /search coldplay yellow")
+        await message.answer("❌ напиши что-нибудь после /search плиз\nнапример /search coldplay yellow")
         return
     
     query = " ".join(message.text.split()[1:])
-    searching_message = await message.answer("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
+    searching_message = await message.answer("🔍 ищу треки на youtube soundcloud и bandcamp")
     
     search_id = str(uuid.uuid4())
     # Search all sources concurrently
@@ -781,7 +621,7 @@ async def cmd_search(message: types.Message):
     # Limit total results if needed
 
     if not combined_results:
-        await message.answer("❌ чет ничего не нашлось ни там, ни там. попробуй другой запрос?")
+        await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     
@@ -789,7 +629,7 @@ async def cmd_search(message: types.Message):
     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
     
     await message.answer(
-        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
+        f"🎵 нашел для тебя {len(combined_results)} треков по запросу '{query}' ⬇",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
@@ -812,9 +652,9 @@ async def cmd_cancel(message: types.Message):
         if user_id in download_queues:
             download_queues[user_id].clear()
             
-        await message.answer("✅ ок, отменил все активные загрузки и почистил очередь.")
+        await message.answer("✅ ок отменил все активные загрузки и почистил очередь")
     else:
-        await message.answer("❌ так щас ничего и не качается вроде...")
+        await message.answer("❌ так щас ничего и не качается вроде")
 
 @dp.callback_query(F.data.startswith("d_"))
 async def process_download_callback(callback: types.CallbackQuery):
@@ -838,24 +678,24 @@ async def process_download_callback(callback: types.CallbackQuery):
         if active_downloads >= MAX_PARALLEL_DOWNLOADS:
             download_queues[user_id].append((track_data, callback.message))
             await callback.answer(
-                f"⏳ добавил в очередь ({queue_size+1}-й). качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+                f"⏳ добавил в очередь ({queue_size+1}-й) качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
             )
         else:
             # Using answer instead of sending a new message for initial status
-            status_message = await callback.message.answer(f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}") 
+            status_message = await callback.message.answer(f"⏳ начинаю скачивать {track_data['title']} - {track_data['channel']}")
             task = asyncio.create_task(
                 download_track(user_id, track_data, callback.message, status_message)
             )
             download_tasks[user_id][track_data["url"]] = task
-            await callback.answer("начал скачивание") # Acknowledge callback
+            await callback.answer("начал скачивание")
             
     except json.JSONDecodeError:
-         await callback.message.answer("❌ чет не смог разобрать данные трека. попробуй поискать снова.")
+         await callback.message.answer("❌ чет не смог разобрать данные трека попробуй поискать снова")
          await callback.answer()
     except Exception as e:
         print(f"Error in process_download_callback: {e}")
-        await callback.message.answer(f"❌ ой, ошибка: {str(e)}")
-        await callback.answer() # Acknowledge callback even on error
+        await callback.message.answer(f"❌ ой ошибка {str(e).lower()}")
+        await callback.answer()
 
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download_callback_with_index(callback: types.CallbackQuery):
@@ -865,7 +705,7 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         search_id = parts[2]
         
         if search_id not in search_results:
-            await callback.answer("❌ результаты поиска уже устарели. найди снова, плз.", show_alert=True)
+            await callback.answer("❌ результаты поиска уже устарели найди снова плз", show_alert=True)
             return
         
         tracks = search_results[search_id]
@@ -889,23 +729,23 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
             if active_downloads >= MAX_PARALLEL_DOWNLOADS:
                 download_queues[user_id].append((track_data, callback.message))
                 await callback.answer(
-                    f"⏳ добавил в очередь ({queue_size+1}-й). качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
+                    f"⏳ добавил в очередь ({queue_size+1}-й) качаю {active_downloads}/{MAX_PARALLEL_DOWNLOADS}"
                 )
             else:
-                status_message = await callback.message.answer(f"⏳ начинаю скачивать: {track_data['title']} - {track_data['channel']}")
+                status_message = await callback.message.answer(f"⏳ начинаю скачивать {track_data['title']} - {track_data['channel']}")
                 task = asyncio.create_task(
                     download_track(user_id, track_data, callback.message, status_message)
                 )
                 download_tasks[user_id][track_data["url"]] = task
-                await callback.answer("начал скачивание") # Acknowledge callback
+                await callback.answer("начал скачивание")
         else:
-            await callback.answer("❌ не нашел трек по этому индексу.", show_alert=True)
+            await callback.answer("❌ не нашел трек по этому индексу", show_alert=True)
             
     except IndexError:
-         await callback.answer("❌ чет не смог разобрать данные для скачивания.", show_alert=True)
+         await callback.answer("❌ чет не смог разобрать данные для скачивания", show_alert=True)
     except Exception as e:
         print(f"Error in process_download_callback_with_index: {e}")
-        await callback.answer(f"❌ ой, ошибка: {str(e)}", show_alert=True)
+        await callback.answer(f"❌ ой ошибка {str(e).lower()}", show_alert=True)
 
 @dp.callback_query(F.data.startswith("page_"))
 async def process_page_callback(callback: types.CallbackQuery):
@@ -915,23 +755,22 @@ async def process_page_callback(callback: types.CallbackQuery):
         search_id = parts[2]
         
         if search_id not in search_results:
-            await callback.answer("❌ эти результаты поиска уже старые. поищи заново.", show_alert=True)
+            await callback.answer("❌ эти результаты поиска уже старые поищи заново", show_alert=True)
             return
         
         tracks = search_results[search_id]
         keyboard = create_tracks_keyboard(tracks, page, search_id)
         
         await callback.message.edit_reply_markup(reply_markup=keyboard)
-        await callback.answer() # Simple ack for page turn
+        await callback.answer()
     except (IndexError, ValueError):
-        await callback.answer("❌ чет не смог понять номер страницы.", show_alert=True)
+        await callback.answer("❌ чет не смог понять номер страницы", show_alert=True)
     except Exception as e:
         print(f"Error in process_page_callback: {e}")
-        await callback.answer(f"❌ блин, ошибка при перелистывании: {str(e)}", show_alert=True)
+        await callback.answer(f"❌ блин ошибка при перелистывании {str(e).lower()}", show_alert=True)
         
 @dp.callback_query(F.data == "info")
 async def process_info_callback(callback: types.CallbackQuery):
-    # Simple ack for the info button (page number)
     await callback.answer()
 
 @dp.message()
@@ -973,132 +812,54 @@ async def handle_text(message: types.Message):
             await handle_url_download(message, url_check) # Pass URL directly
             return
         else:
-            # Private chat: Search based on user settings
-            user_id = message.from_user.id
-            search_mode = user_settings[user_id]
+            # Treat as search query - Indent this whole block
             query = message.text
-            
-            print(f"[Private Search] User {user_id} searching with mode '{search_mode}' for query: '{query}'")
-            
-            if search_mode == 'Музыка':
-                # Existing Music Search Logic
-                searching_message = await message.answer("🎵 Ищу музыку (SC/BC/YT)...", disable_web_page_preview=True)
-                search_id = str(uuid.uuid4())
-                try:
-                    max_results_per_source = MAX_TRACKS // 3
-                    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-                        search_youtube(query, max_results_per_source),
-                        search_soundcloud(query, max_results_per_source),
-                        search_bandcamp(query, max_results_per_source)
+            searching_message = await message.answer("🔍 ищу треки на youtube soundcloud и bandcamp...")
+            search_id = str(uuid.uuid4())
+            # Search all sources concurrently
+            try:
+                max_results_per_source = MAX_TRACKS // 3
+                youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                    search_youtube(query, max_results_per_source),
+                    search_soundcloud(query, max_results_per_source),
+                    search_bandcamp(query, max_results_per_source)
+                )
+
+                # Prioritize SoundCloud -> Bandcamp -> YouTube results
+                combined_results = []
+                for sc_track in soundcloud_results:
+                    if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                    combined_results.append(sc_track)
+                for bc_track in bandcamp_results:
+                    if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+                    combined_results.append(bc_track)
+                for yt_track in youtube_results:
+                    if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                    combined_results.append(yt_track)
+
+                if not combined_results:
+                    await bot.edit_message_text(
+                         chat_id=searching_message.chat.id, 
+                         message_id=searching_message.message_id,
+                         text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
                     )
-
-                    combined_results = []
-                    for sc_track in soundcloud_results:
-                        if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
-                        combined_results.append(sc_track)
-                    for bc_track in bandcamp_results:
-                        if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-                        combined_results.append(bc_track)
-                    for yt_track in youtube_results:
-                        if 'source' not in yt_track: yt_track['source'] = 'youtube'
-                        combined_results.append(yt_track)
-
-                    if not combined_results:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text="❌ Ничего не найдено (Музыка)."
-                        )
-                    else:
-                        search_results[search_id] = combined_results
-                        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"🎵 Найдено {len(combined_results)} муз. треков по запросу '{query}':",
-                            reply_markup=keyboard
-                        )
-                except Exception as e:
-                    print(f"Error during private music search for query '{query}': {e}\n{traceback.format_exc()}")
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"❌ Ошибка при поиске музыки: {e}"
-                        )
-                    except Exception as edit_err:
-                        print(f"Failed to edit message after music search error: {edit_err}")
-                        
-            elif search_mode == 'Видео':
-                searching_message = await message.answer(f"🎬 Ищу видео (YT) по запросу '{query}'...", disable_web_page_preview=True)
-                search_id = str(uuid.uuid4())
-                try:
-                    # Use MAX_TRACKS directly here, as it's the only source
-                    video_results = await search_video(query, MAX_TRACKS) 
-
-                    if not video_results:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text="❌ Видео по такому запросу не найдено."
-                        )
-                    else:
-                        # For video results, we can reuse create_tracks_keyboard 
-                        # It will show title/channel/duration. Callback will trigger URL download.
-                        search_results[search_id] = video_results 
-                        keyboard = create_tracks_keyboard(video_results, 0, search_id)
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"🎬 Найдено {len(video_results)} видео по запросу '{query}':",
-                            reply_markup=keyboard
-                        )
-                except Exception as e:
-                    print(f"Error during private video search for query '{query}': {e}\n{traceback.format_exc()}")
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"❌ Ошибка при поиске видео: {e}"
-                        )
-                    except Exception as edit_err:
-                        print(f"Failed to edit message after video search error: {edit_err}")
-                
-            elif search_mode == 'Special':
-                # Updated status message as only PH is searched now
-                searching_message = await message.answer(f"🌶️ Ищу Special (Pornhub) по запросу '{query}'...", disable_web_page_preview=True)
-                search_id = str(uuid.uuid4())
-                try:
-                    # Use MAX_TRACKS, search_special will divide it internally
-                    special_results = await search_special(query, MAX_TRACKS)
-
-                    if not special_results:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text="❌ Special видео по такому запросу не найдено."
-                        )
-                    else:
-                        # Reuse keyboard creation for special results
-                        search_results[search_id] = special_results 
-                        keyboard = create_tracks_keyboard(special_results, 0, search_id)
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"🌶️ Найдено {len(special_results)} Special видео по запросу '{query}':",
-                            reply_markup=keyboard
-                        )
-                except Exception as e:
-                    print(f"Error during private special search for query '{query}': {e}\n{traceback.format_exc()}")
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id, 
-                            message_id=searching_message.message_id,
-                            text=f"❌ Ошибка при поиске Special: {e}"
-                        )
-                    except Exception as edit_err:
-                        print(f"Failed to edit message after special search error: {edit_err}")
-
+                    return # Correctly indented return
+    
+                search_results[search_id] = combined_results
+                keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+                await bot.edit_message_text(
+                    chat_id=searching_message.chat.id, 
+                    message_id=searching_message.message_id,
+                    text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                 print(f"Error during private search for query '{query}': {e}")
+                 await bot.edit_message_text(
+                     chat_id=searching_message.chat.id, 
+                     message_id=searching_message.message_id,
+                     text=f"❌ блин ошибка при поиске: {e}"
+                 )
             return # End of private search logic
 
     # If chat type is somehow neither private nor group/supergroup, do nothing
@@ -1108,14 +869,14 @@ async def handle_url_download(message: types.Message, url: str):
     """Handles messages identified as URLs (or via 'медиакот') to initiate download."""
     # Use reply for group trigger, answer for direct URL in private
     reply_method = message.reply if message.chat.type != 'private' else message.answer
-    status_message = await reply_method(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
+    status_message = await reply_method(f"⏳ пытаюсь скачать медиа по ссылке {url[:50]}", disable_web_page_preview=True)
     
     # Pass the original message for context if needed later, and the status message to update
     await download_media_from_url(url, message, status_message)
 
 async def handle_group_search(message: types.Message, query: str):
     """Handles 'музыкакот' command in groups."""
-    status_message = await message.reply("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
+    status_message = await message.reply("🔍 ищу треки на youtube soundcloud и bandcamp...")
     search_id = str(uuid.uuid4())
     
     try:
@@ -1141,7 +902,7 @@ async def handle_group_search(message: types.Message, query: str):
             await bot.edit_message_text(
                 chat_id=status_message.chat.id,
                 message_id=status_message.message_id,
-                text="❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?"
+                text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
             )
             return
 
@@ -1159,7 +920,7 @@ async def handle_group_search(message: types.Message, query: str):
         await bot.edit_message_text(
             chat_id=status_message.chat.id,
             message_id=status_message.message_id,
-            text=f"❌ блин, ошибка при поиске: {e}"
+            text=f"❌ блин ошибка при поиске: {e}"
         )
 
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
@@ -1202,7 +963,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
         # --- 2. Download --- 
         await bot.edit_message_text(
-            f"⏳ качаю медиа...",
+            f"⏳ качаю медиа",
             chat_id=status_message.chat.id,
             message_id=status_message.message_id
         )
@@ -1236,7 +997,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             if os.path.exists(part_file):
                  print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
                  # Try renaming? Risky.
-            raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями.")
+            raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями")
         
         temp_path = actual_downloaded_path # Keep track for cleanup
         file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
@@ -1249,7 +1010,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         if file_size_bytes > telegram_limit_bytes:
              file_size_mb = file_size_bytes / (1024 * 1024)
              print(f"[URL Download] ERROR: File too large ({file_size_mb:.2f} MB) for Telegram limit (50 MB).")
-             raise Exception(f"скачанный файл слишком большой ({file_size_mb:.1f} МБ). Телеграм разрешает ботам загружать файлы до 50 МБ.")
+             raise Exception(f"скачанный файл слишком большой ({file_size_mb:.1f} мб) телеграм разрешает ботам загружать файлы до 50 мб")
         else:
              print(f"[URL Download] File size ({file_size_bytes / (1024 * 1024):.2f} MB) is within Telegram limit.")
              
@@ -1269,7 +1030,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         safe_title = safe_title[:150] if safe_title else 'media'
 
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        sending_message = await original_message.answer(f"📤 отправляю {('аудио' if is_audio else 'видео' if is_video else 'файл')}...")
+        sending_message = await original_message.answer(f"📤 отправляю {('аудио' if is_audio else 'видео' if is_video else 'файл')}")
         
         if is_audio:
             print(f"[URL Download] Sending as Audio: {actual_downloaded_path}")
@@ -1312,14 +1073,19 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
     except Exception as e:
         print(f"ERROR during URL download/processing for {url}: {e}\n{traceback.format_exc()}")
-        error_text = f"❌ блин, ошибка при скачивании/обработке ссылки: {str(e)}"
+        error_text_base = f"❌ блин ошибка при скачивании/обработке ссылки {str(e).lower()}"
         if "Unsupported URL" in str(e):
-             error_text = f"❌ извини, ссылка не поддерживается или не содержит медиа: {url[:60]}..."
-        elif "whoops" in str(e).lower() or "unable to download video data" in str(e).lower(): # Common yt-dlp errors
-             error_text = f"❌ не получилось скачать данные по ссылке. возможно, она битая или требует логина."
+             error_text_base = f"❌ извини ссылка не поддерживается или не содержит медиа {url[:60]}"
+        elif "Request Entity Too Large" in str(e): # Handle this specific error nicely
+             error_text_base = f"❌ скачанный файл слишком большой чтобы отправить его через телеграм (лимит 50 мб)"
+        elif "File too large" in str(e): # Handle our custom large file exception
+             error_text_base = f"❌ {str(e).lower()}" # Already formatted
+        elif "whoops" in str(e).lower() or "unable to download video data" in str(e).lower():
+             error_text_base = f"❌ не получилось скачать данные по ссылке возможно она битая или требует логина"
              
+        error_text = error_text_base.replace(',', '').replace('.', '') # Apply final cleanup
         if len(error_text) > 4000: 
-            error_text = error_text[:4000] + "..."
+            error_text = error_text[:3995] + "..." # Adjusted length for ellipsis
         try:
             await bot.edit_message_text(
                 chat_id=status_message.chat.id,
@@ -1328,14 +1094,14 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 disable_web_page_preview=True
             )
         except Exception as edit_error:
-            print(f"Failed to edit message for URL download error: {edit_error}")
+            print(f"Failed to edit message for error: {edit_error}")
             # Try sending a new message if editing fails
             try:
                  await original_message.answer(error_text, disable_web_page_preview=True)
                  # Try deleting the original status message if possible
                  await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             except Exception as send_error:
-                 print(f"Failed to send new message for URL download error: {send_error}")
+                 print(f"Failed to send new message for error: {send_error}")
 
     finally:
         # --- 5. Cleanup --- 
