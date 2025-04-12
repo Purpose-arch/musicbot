@@ -1336,10 +1336,12 @@ def create_settings_keyboard(current_mode: str) -> ReplyKeyboardBuilder:
 
 @dp.message(Command("settings"), F.chat.type == 'private')
 async def cmd_settings(message: types.Message):
+    print(f"[Debug] Received /settings command from user {message.from_user.id} in chat {message.chat.id} (type: {message.chat.type})") # Debug print
     user_id = message.from_user.id
     current_mode = user_settings[user_id]
     mode_text = {'music': 'Музыка', 'video': 'Видео', 'special': 'Special'}.get(current_mode, 'Музыка')
     keyboard = create_settings_keyboard(current_mode)
+    print(f"[Debug] Created keyboard for user {user_id}: {keyboard}") # Debug print
     await message.answer(
         f"⚙️ *Настройки Поиска*\n\nТекущий режим: *{mode_text}*\n\nВыберите режим поиска по умолчанию для этого чата:", 
         reply_markup=keyboard,
