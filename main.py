@@ -354,6 +354,50 @@ def _blocking_download_and_convert(url, download_opts):
 async def download_track(user_id, track_data, callback_message, status_message):
     temp_path = None
     loop = asyncio.get_running_loop()
+    last_update_time = time.time()
+    last_reported_percent = -1
+    
+    # --- Progress Hook Definition --- 
+    async def progress_hook(d):
+        nonlocal last_update_time, last_reported_percent
+        if d['status'] == 'downloading':
+            current_time = time.time()
+            # Throttle updates: more than 3 seconds passed OR percentage increased by > 5%
+            percent_str = d.get('_percent_str', '').strip().replace('%','')
+            try:
+                percent = float(percent_str)
+            except ValueError:
+                percent = 0
+            
+            if (current_time - last_update_time > 3) or (percent - last_reported_percent > 5):
+                eta_str = d.get('_eta_str', '??:??')
+                speed_str = d.get('_speed_str', '').strip()
+                # Ensure percent_str has the % sign for display
+                display_percent = f"{percent:.1f}%" if percent > 0 else "0%"
+                
+                progress_text = f"⏳ качаю: {display_percent}"
+                if eta_str != '??:??':
+                    progress_text += f" (осталось ~{eta_str})"
+                # if speed_str:
+                #     progress_text += f" [{speed_str}]"
+                    
+                try:
+                    await bot.edit_message_text(
+                        progress_text,
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id
+                    )
+                    last_update_time = current_time
+                    last_reported_percent = percent
+                except Exception as e:
+                    # Ignore MessageNotModified or other potential edit errors silently
+                    # print(f"[Progress Hook] Error editing message: {e}") 
+                    pass # Avoid crashing download due to edit errors
+        elif d['status'] == 'finished':
+             # Optionally update message on finish, though main logic already does
+             pass
+             
+    # --- End Progress Hook ---
     
     try:
         title = track_data["title"]
@@ -400,7 +444,8 @@ async def download_track(user_id, track_data, callback_message, status_message):
             'nocheckcertificate': True,
             'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
             'extract_flat': False, # Нужно для скачивания, а не только для поиска
-            'ffmpeg_location': '/usr/bin/ffmpeg' # Оставляем явное указание пути
+            'ffmpeg_location': '/usr/bin/ffmpeg', # Оставляем явное указание пути
+            'progress_hooks': [progress_hook] # Add the hook here
         }
         
         expected_mp3_path = base_temp_path + '.mp3'
@@ -419,6 +464,7 @@ async def download_track(user_id, track_data, callback_message, status_message):
             print(f"Using download options: {download_opts}")
 
             # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
+            # Передаем хук в опциях
             await loop.run_in_executor(
                 None,  # Используем стандартный ThreadPoolExecutor
                 _blocking_download_and_convert,
@@ -855,7 +901,41 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     temp_dir = tempfile.gettempdir()
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None # Path to the final downloaded file
-    
+    last_update_time = time.time()
+    last_reported_percent = -1
+
+    # --- Progress Hook Definition (similar to download_track) --- 
+    async def progress_hook(d):
+        nonlocal last_update_time, last_reported_percent
+        if d['status'] == 'downloading':
+            current_time = time.time()
+            percent_str = d.get('_percent_str', '').strip().replace('%','')
+            try:
+                percent = float(percent_str)
+            except ValueError:
+                percent = 0
+            
+            if (current_time - last_update_time > 3) or (percent - last_reported_percent > 5):
+                eta_str = d.get('_eta_str', '??:??')
+                display_percent = f"{percent:.1f}%" if percent > 0 else "0%"
+                progress_text = f"⏳ качаю: {display_percent}"
+                if eta_str != '??:??':
+                    progress_text += f" (осталось ~{eta_str})"
+                try:
+                    await bot.edit_message_text(
+                        progress_text,
+                        chat_id=status_message.chat.id,
+                        message_id=status_message.message_id
+                    )
+                    last_update_time = current_time
+                    last_reported_percent = percent
+                except Exception as e:
+                    pass # Ignore edit errors
+        elif d['status'] == 'finished':
+             pass
+             
+    # --- End Progress Hook ---
+
     # Options for general media download (prefer best video+audio, fallback to best single file)
     media_ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
@@ -871,6 +951,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Add merge output format if separate streams are downloaded
         'merge_output_format': 'mp4', 
         # No audio-specific postprocessor here initially
+        'progress_hooks': [progress_hook] # Add the hook here
     }
 
     try:
