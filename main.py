@@ -980,14 +980,21 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         print(f"\n[URL Download] Starting download for: {url}")
         print(f"[URL Download] Using download options: {media_ydl_opts}")
 
+        # Create a stricter options copy for the actual download attempt
+        download_specific_opts = media_ydl_opts.copy()
+        download_specific_opts['ignoreerrors'] = False # Make download attempt strict
+
         # Use the reusable blocking download function
         download_result_info = await loop.run_in_executor(
             None, 
             _blocking_download_and_convert, # Now returns info dict
             url,
-            media_ydl_opts
+            download_specific_opts # Pass strict options
         )
         print(f"[URL Download] Finished blocking download call for: {url}")
+        
+        # -- DEBUG: Log the returned info dict --
+        print(f"[URL Download Debug] Full download_result_info:\n{json.dumps(download_result_info, indent=2, default=str)}")
         
         # --- 3. Find the actual downloaded file --- 
         # Extract filepath from the returned info dict
@@ -1024,6 +1031,15 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
              if os.path.exists(part_file):
                  print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
                  # Try renaming? Risky.
+                 
+             # -- DEBUG: List directory contents before failing --
+             try:
+                 print(f"[URL Download Debug] Listing contents of temp dir ({temp_dir}) before raising error:")
+                 dir_contents = os.listdir(temp_dir)
+                 print(f"[URL Download Debug] Contents: {dir_contents}")
+             except Exception as list_err:
+                 print(f"[URL Download Debug] Failed to list temp dir contents: {list_err}")
+                 
              raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями")
 
         # This part should only execute if actual_downloaded_path WAS found
@@ -1099,8 +1115,38 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         await bot.delete_message(chat_id=sending_message.chat.id, message_id=sending_message.message_id)
         print(f"[URL Download] Finished processing URL: {url}")
 
+    except yt_dlp.utils.DownloadError as dl_err:
+         # Catch specific yt-dlp download errors
+         print(f"ERROR yt-dlp DownloadError for {url}: {dl_err}")
+         error_text_base = f"❌ ошибка загрузки yt-dlp возможно ссылка битая или сайт изменился"
+         # Attempt to extract a more specific error message if available
+         # yt-dlp often includes the reason in the error message string
+         error_msg_lower = str(dl_err).lower()
+         if 'forbidden' in error_msg_lower or 'unavailable' in error_msg_lower:
+             error_text_base = f"❌ видео недоступно или доступ запрещен"
+         elif 'private' in error_msg_lower:
+             error_text_base = f"❌ это приватное видео нужен логин"
+             
+         error_text = error_text_base.replace(',', '').replace('.', '') # Apply style
+         try:
+             await bot.edit_message_text(
+                 chat_id=status_message.chat.id,
+                 message_id=status_message.message_id,
+                 text=error_text,
+                 disable_web_page_preview=True
+             )
+         except Exception as edit_error:
+             print(f"Failed to edit message for DownloadError: {edit_error}")
+             # Fallback to sending new message
+             try:
+                  await original_message.answer(error_text, disable_web_page_preview=True)
+                  await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+             except Exception as send_error:
+                  print(f"[URL Download] Warning: Failed to send new message for DownloadError: {send_error}")
+
     except Exception as e:
-        print(f"ERROR during URL download/processing for {url}: {e}\n{traceback.format_exc()}")
+        # Generic exception handler remains the same
+        print(f"ERROR during URL download/processing for {url}: {e}\\n{traceback.format_exc()}")
         error_text_base = f"❌ блин ошибка при скачивании/обработке ссылки {str(e).lower()}"
         if "Unsupported URL" in str(e):
              error_text_base = f"❌ извини ссылка не поддерживается или не содержит медиа {url[:60]}"
