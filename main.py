@@ -7,7 +7,7 @@ import math
 from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, ChatTypeFilter
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
@@ -776,76 +776,152 @@ async def process_info_callback(callback: types.CallbackQuery):
     # Simple ack for the info button (page number)
     await callback.answer()
 
-@dp.message(ChatTypeFilter(chat_type=["private"]))
+@dp.message()
 async def handle_text(message: types.Message):
     # Ignore commands explicitly
     if message.text.startswith('/'):
-        # Maybe add a hint for unknown commands?
-        # await message.answer("хм, не знаю такую команду. попробуй /help")
         return
+        
+    text_lower = message.text.lower().strip()
+    chat_type = message.chat.type
 
-    # --- NEW: Check if the message is a URL --- 
-    # Basic URL check (starts with http/https)
-    # A more robust regex could be used, but this is often sufficient for bots
-    if message.text.strip().startswith(('http://', 'https://')):
-        await handle_url_download(message)
-        return # Stop processing, let the URL handler do its job
-    # --- End of URL Check ---
+    # --- Group Chat Logic --- 
+    if chat_type in ('group', 'supergroup'):
+        if text_lower.startswith("медиакот "):
+            url = message.text.strip()[len("медиакот "):].strip()
+            if url.startswith('http://') or url.startswith('https://'):
+                await handle_url_download(message, url)
+            else:
+                await message.reply("❌ после 'медиакот' нужна ссылка (http://... или https://...)")
+            return
+        elif text_lower.startswith("музыкакот "):
+            query = message.text.strip()[len("музыкакот "):].strip()
+            if query:
+                 await handle_group_search(message, query)
+            else:
+                 await message.reply("❌ после 'музыкакот' нужно написать запрос для поиска.")
+            return
+        else:
+            # Ignore other messages in groups
+            return 
+            
+    # --- Private Chat Logic --- 
+    elif chat_type == 'private':
+        url_check = message.text.strip()
+        if url_check.startswith(('http://', 'https://')):
+            await handle_url_download(message, url_check) # Pass URL directly
+            return
+        else:
+            # Treat as search query
+            query = message.text
+            searching_message = await message.answer("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
+            search_id = str(uuid.uuid4())
+            # Search all sources concurrently
+            try:
+                max_results_per_source = MAX_TRACKS // 3
+                youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                    search_youtube(query, max_results_per_source),
+                    search_soundcloud(query, max_results_per_source),
+                    search_bandcamp(query, max_results_per_source)
+                )
+
+                # Prioritize SoundCloud -> Bandcamp -> YouTube results
+                combined_results = []
+                for sc_track in soundcloud_results:
+                    if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                    combined_results.append(sc_track)
+                for bc_track in bandcamp_results:
+                    if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+                    combined_results.append(bc_track)
+                for yt_track in youtube_results:
+                    if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                    combined_results.append(yt_track)
+
+                if not combined_results:
+                    await bot.edit_message_text(
+                         chat_id=searching_message.chat.id, 
+                         message_id=searching_message.message_id,
+                         text="❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?"
+                    )
+                    return
+
+                search_results[search_id] = combined_results
+                keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+                await bot.edit_message_text(
+                    chat_id=searching_message.chat.id, 
+                    message_id=searching_message.message_id,
+                    text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                 print(f"Error during private search for query '{query}': {e}")
+                 await bot.edit_message_text(
+                     chat_id=searching_message.chat.id, 
+                     message_id=searching_message.message_id,
+                     text=f"❌ блин, ошибка при поиске: {e}"
+                 )
+            return # End of private search logic
+
+    # If chat type is somehow neither private nor group/supergroup, do nothing
+    return
+
+async def handle_url_download(message: types.Message, url: str):
+    """Handles messages identified as URLs (or via 'медиакот') to initiate download."""
+    # Use reply for group trigger, answer for direct URL in private
+    reply_method = message.reply if message.chat.type != 'private' else message.answer
+    status_message = await reply_method(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
     
-    # If not a URL, treat as search query (existing logic)
-    query = message.text
-    searching_message = await message.answer("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
-
-    search_id = str(uuid.uuid4())
-    # Search all sources concurrently
-    max_results_per_source = MAX_TRACKS // 3 # Divide budget
-    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-        search_youtube(query, max_results_per_source),
-        search_soundcloud(query, max_results_per_source),
-        search_bandcamp(query, max_results_per_source) # Add bandcamp search
-    )
-
-    # Prioritize SoundCloud -> Bandcamp -> YouTube results
-    combined_results = []
-    # Add SoundCloud results first
-    for sc_track in soundcloud_results:
-         if 'source' not in sc_track:
-             sc_track['source'] = 'soundcloud'
-         combined_results.append(sc_track)
-    # Then add Bandcamp results
-    for bc_track in bandcamp_results:
-         if 'source' not in bc_track:
-             bc_track['source'] = 'bandcamp'
-         combined_results.append(bc_track)
-    # Then add YouTube results
-    for yt_track in youtube_results:
-         if 'source' not in yt_track:
-             yt_track['source'] = 'youtube'
-         combined_results.append(yt_track)
-
-    # Limit total results if needed
-
-    if not combined_results:
-        await message.answer("❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?")
-        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-        return
-
-    search_results[search_id] = combined_results # Store combined results
-    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-
-    await message.answer(
-        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
-        reply_markup=keyboard
-    )
-    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-
-async def handle_url_download(message: types.Message):
-    """Handles messages identified as URLs to initiate download."""
-    url = message.text.strip()
-    # Send status message normally, not as reply initially
-    status_message = await message.answer(f"⏳ пытаюсь скачать медиа по ссылке: {url[:50]}...", disable_web_page_preview=True)
-    # For now, download directly without queueing.
+    # Pass the original message for context if needed later, and the status message to update
     await download_media_from_url(url, message, status_message)
+
+async def handle_group_search(message: types.Message, query: str):
+    """Handles 'музыкакот' command in groups."""
+    status_message = await message.reply("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
+    search_id = str(uuid.uuid4())
+    
+    try:
+        max_results_per_source = MAX_TRACKS // 3
+        youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+            search_youtube(query, max_results_per_source),
+            search_soundcloud(query, max_results_per_source),
+            search_bandcamp(query, max_results_per_source)
+        )
+
+        combined_results = []
+        for sc_track in soundcloud_results:
+            if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+            combined_results.append(sc_track)
+        for bc_track in bandcamp_results:
+            if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+            combined_results.append(bc_track)
+        for yt_track in youtube_results:
+            if 'source' not in yt_track: yt_track['source'] = 'youtube'
+            combined_results.append(yt_track)
+
+        if not combined_results:
+            await bot.edit_message_text(
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id,
+                text="❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?"
+            )
+            return
+
+        search_results[search_id] = combined_results
+        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+        await bot.edit_message_text(
+            chat_id=status_message.chat.id,
+            message_id=status_message.message_id,
+            text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
+            reply_markup=keyboard
+        )
+
+    except Exception as e:
+        print(f"Error during group search for query '{query}': {e}")
+        await bot.edit_message_text(
+            chat_id=status_message.chat.id,
+            message_id=status_message.message_id,
+            text=f"❌ блин, ошибка при поиске: {e}"
+        )
 
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
     """Downloads media (audio or video) from a direct URL using yt-dlp."""
@@ -954,7 +1030,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         safe_title = safe_title[:150] if safe_title else 'media'
 
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        # Send a new status message before sending the file (as reply)
         sending_message = await original_message.answer(f"📤 отправляю {('аудио' if is_audio else 'видео' if is_video else 'файл')}...")
         
         if is_audio:
@@ -970,14 +1045,12 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 title=safe_title,
                 performer=performer,
                 duration=int(duration) if duration else None,
-                reply_to_message_id=original_message.message_id # Add reply_to_message_id
-                # caption=f"Скачано с: {url}" # Optional caption - Already commented
+                # caption=f"Скачано с: {url}" # Optional caption
             )
         elif is_video:
             print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
             await bot.send_video(
                 chat_id=original_message.chat.id,
-                reply_to_message_id=original_message.message_id,
                 video=FSInputFile(actual_downloaded_path),
                 duration=int(duration) if duration else None,
                 width=width if width else None,
@@ -990,7 +1063,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             # Fallback: send as document if type is unknown
             await bot.send_document(
                 chat_id=original_message.chat.id,
-                reply_to_message_id=original_message.message_id,
                 document=FSInputFile(actual_downloaded_path)
                 # caption=safe_title # REMOVED caption
             )
@@ -1047,91 +1119,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     
         if not cleaned_a_file:
             print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
-
-# --- NEW: Group Command Handlers ---
-
-@dp.message(ChatTypeFilter(chat_type=["group", "supergroup"]), F.text.startswith("медиакот "))
-async def group_url_handler(message: types.Message):
-    """Handles 'медиакот <url>' command in groups."""
-    if len(message.text.split()) < 2:
-        await message.reply("❌ после 'медиакот' нужна ссылка, например:\nмедиакот https://...")
-        return
-        
-    url = message.text.split(maxsplit=1)[1].strip()
-    # Basic URL validation
-    if not url.startswith(('http://', 'https://')):
-        await message.reply("❌ это не похоже на ссылку. Она должна начинаться с http:// или https://")
-        return
-        
-    # Re-use the existing handle_url_download logic, it knows how to reply now
-    # Create a dummy message object containing just the URL text for handle_url_download
-    # and pass the original group message for context (replying etc.)
-    class MockMessage:
-        def __init__(self, text, original_msg):
-            self.text = text
-            self.chat = original_msg.chat
-            self.message_id = original_msg.message_id
-            self.from_user = original_msg.from_user # Preserve user info if needed later
-            self.reply_to_message_id = original_msg.message_id # Ensure replies go to the command
-            self.answer = original_msg.answer # Use the original message's answer method for status
-            self.reply = original_msg.reply # Use the original message's reply method
-            
-    mock_message = MockMessage(url, message)
-    await handle_url_download(mock_message) # Pass the mock message containing the URL
-    
-@dp.message(ChatTypeFilter(chat_type=["group", "supergroup"]), F.text.startswith("музыкакот "))
-async def group_search_handler(message: types.Message):
-    """Handles 'музыкакот <query>' command in groups."""
-    if len(message.text.split()) < 2:
-        await message.reply("❌ после 'музыкакот' нужно написать, что искать, например:\nмузыкакот anacondaz")
-        return
-        
-    query = message.text.split(maxsplit=1)[1].strip()
-    
-    # Send searching status as a reply first
-    searching_message = await message.reply("🔍 ищу треки на YouTube, SoundCloud и Bandcamp...")
-    
-    search_id = str(uuid.uuid4())
-    max_results_per_source = MAX_TRACKS // 3
-    try:
-        youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-            search_youtube(query, max_results_per_source),
-            search_soundcloud(query, max_results_per_source),
-            search_bandcamp(query, max_results_per_source)
-        )
-    except Exception as search_err:
-        print(f"Error during group search gather: {search_err}")
-        await bot.edit_message_text("❌ Ошибка во время поиска...", chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-        return
-
-    # Combine and prioritize results (SoundCloud -> Bandcamp -> YouTube)
-    combined_results = []
-    for sc_track in soundcloud_results:
-         if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
-         combined_results.append(sc_track)
-    for bc_track in bandcamp_results:
-         if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-         combined_results.append(bc_track)
-    for yt_track in youtube_results:
-         if 'source' not in yt_track: yt_track['source'] = 'youtube'
-         combined_results.append(yt_track)
-
-    if not combined_results:
-        await bot.edit_message_text("❌ ничего не нашел по твоему запросу.", chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-        return
-
-    search_results[search_id] = combined_results
-    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-    
-    # Edit the status message to show results with keyboard
-    await bot.edit_message_text(
-        text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
-        chat_id=searching_message.chat.id, 
-        message_id=searching_message.message_id,
-        reply_markup=keyboard
-    )
-    # Note: We are editing the bot's status message, not replying again.
-    # The original trigger message remains, and the bot's message with the keyboard is a reply to it.
 
 async def main():
     await dp.start_polling(bot)
