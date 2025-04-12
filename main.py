@@ -38,9 +38,8 @@ search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
 MAX_PARALLEL_DOWNLOADS = 3  # Максимальное количество одновременных загрузок
 
-# Хранилище настроек пользователей (только для личных чатов)
-# user_id -> search_mode ('music', 'video', 'special')
-user_settings = defaultdict(lambda: 'music')
+# Хранилище настроек пользователей {user_id: search_mode}
+user_settings = defaultdict(lambda: 'Музыка') # Default mode is 'Музыка'
 
 # Настройки yt-dlp
 ydl_opts = {
@@ -563,6 +562,17 @@ def set_mp3_metadata(file_path, title, artist):
         print(f"ошибка при установке метаданных: {e}")
         return False
 
+# --- Keyboard Builders ---
+
+def get_settings_keyboard(current_mode: str):
+    builder = ReplyKeyboardBuilder()
+    modes = ["Музыка", "Видео", "Special"]
+    for mode in modes:
+        prefix = "✅ " if mode == current_mode else ""
+        builder.button(text=f"{prefix}{mode}")
+    builder.adjust(3) # 3 buttons per row
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -589,6 +599,42 @@ async def cmd_help(message: types.Message):
 
 _Бот использует yt-dlp для скачивания, поддерживается много сайтов!_"""
     await message.answer(help_text, parse_mode="Markdown")
+
+@dp.message(Command("settings"))
+async def cmd_settings(message: types.Message):
+    if message.chat.type != 'private':
+        await message.reply("Настройки доступны только в личных сообщениях.")
+        return
+        
+    user_id = message.from_user.id
+    current_mode = user_settings[user_id]
+    keyboard = get_settings_keyboard(current_mode)
+    await message.answer(
+        f"⚙️ Выбери режим поиска. Текущий: *{current_mode}*", 
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+# --- Settings Handler ---
+@dp.message(F.text.startswith(("✅ Музыка", "Музыка", "✅ Видео", "Видео", "✅ Special", "Special"))) 
+async def handle_settings_choice(message: types.Message):
+    if message.chat.type != 'private': # Settings only in private
+        return 
+        
+    user_id = message.from_user.id
+    chosen_mode_text = message.text.replace("✅ ", "").strip()
+    
+    valid_modes = ["Музыка", "Видео", "Special"]
+    if chosen_mode_text in valid_modes:
+        user_settings[user_id] = chosen_mode_text
+        await message.answer(
+            f"✅ Режим поиска изменен на: *{chosen_mode_text}*", 
+            reply_markup=ReplyKeyboardRemove(), # Remove the settings keyboard
+            parse_mode="Markdown"
+        )
+    else:
+        # Should not happen with reply keyboard, but handle anyway
+        await message.answer("Неизвестный режим. Используй команду /settings.")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
@@ -820,22 +866,78 @@ async def handle_text(message: types.Message):
         if url_check.startswith(('http://', 'https://')):
             await handle_url_download(message, url_check) # Pass URL directly
             return
+        else:
+            # Private chat: Search based on user settings
+            user_id = message.from_user.id
+            search_mode = user_settings[user_id]
+            query = message.text
             
-        # If not a URL, treat as search query based on settings
-        query = message.text
-        user_id = message.from_user.id
-        current_mode = user_settings[user_id]
-        
-        # Prepare search based on mode
-        if current_mode == 'music':
-            await handle_music_search(message, query)
-        elif current_mode == 'video':
-            await handle_video_search(message, query) 
-        elif current_mode == 'special':
-            await handle_special_search(message, query)
-        else: # Fallback just in case
-             await handle_music_search(message, query)
-        return
+            print(f"[Private Search] User {user_id} searching with mode '{search_mode}' for query: '{query}'")
+            
+            if search_mode == 'Музыка':
+                # Existing Music Search Logic
+                searching_message = await message.answer("🎵 Ищу музыку (SC/BC/YT)...", disable_web_page_preview=True)
+                search_id = str(uuid.uuid4())
+                try:
+                    max_results_per_source = MAX_TRACKS // 3
+                    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                        search_youtube(query, max_results_per_source),
+                        search_soundcloud(query, max_results_per_source),
+                        search_bandcamp(query, max_results_per_source)
+                    )
+
+                    combined_results = []
+                    for sc_track in soundcloud_results:
+                        if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                        combined_results.append(sc_track)
+                    for bc_track in bandcamp_results:
+                        if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+                        combined_results.append(bc_track)
+                    for yt_track in youtube_results:
+                        if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                        combined_results.append(yt_track)
+
+                    if not combined_results:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text="❌ Ничего не найдено (Музыка)."
+                        )
+                    else:
+                        search_results[search_id] = combined_results
+                        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"🎵 Найдено {len(combined_results)} муз. треков по запросу '{query}':",
+                            reply_markup=keyboard
+                        )
+                except Exception as e:
+                    print(f"Error during private music search for query '{query}': {e}\n{traceback.format_exc()}")
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"❌ Ошибка при поиске музыки: {e}"
+                        )
+                    except Exception as edit_err:
+                        print(f"Failed to edit message after music search error: {edit_err}")
+                        
+            elif search_mode == 'Видео':
+                # TODO: Implement Video Search (YT/Reddit)
+                await message.answer(f"⏳ Поиск видео по запросу '{query}' (пока не реализовано)...", disable_web_page_preview=True)
+                # Placeholder: Call a future search_video function
+                # results = await search_video(query)
+                # Display results or error
+                
+            elif search_mode == 'Special':
+                 # TODO: Implement Special Search (PH/XV etc.)
+                await message.answer(f"⏳ Поиск Special по запросу '{query}' (пока не реализовано)...", disable_web_page_preview=True)
+                # Placeholder: Call a future search_special function
+                # results = await search_special(query)
+                # Display results or error
+
+            return # End of private search logic
 
     # If chat type is somehow neither private nor group/supergroup, do nothing
     return
@@ -1094,284 +1196,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     
         if not cleaned_a_file:
             print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
-
-async def handle_music_search(message: types.Message, query: str):
-    """Handles music search in private chats based on current logic."""
-    searching_message = await message.answer("🎵 ищу музыку (YT/SC/BC)..." )
-    search_id = str(uuid.uuid4())
-    try:
-        max_results_per_source = MAX_TRACKS // 3
-        youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-            search_youtube(query, max_results_per_source),
-            search_soundcloud(query, max_results_per_source),
-            search_bandcamp(query, max_results_per_source)
-        )
-
-        # Prioritize SoundCloud -> Bandcamp -> YouTube results
-        combined_results = []
-        for sc_track in soundcloud_results:
-            if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
-            combined_results.append(sc_track)
-        for bc_track in bandcamp_results:
-            if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-            combined_results.append(bc_track)
-        for yt_track in youtube_results:
-            if 'source' not in yt_track: yt_track['source'] = 'youtube'
-            combined_results.append(yt_track)
-
-        if not combined_results:
-            await bot.edit_message_text(
-                 chat_id=searching_message.chat.id, 
-                 message_id=searching_message.message_id,
-                 text="❌ ничего не нашел по твоему запросу ни там, ни там. попробуй еще раз?"
-            )
-            return
-
-        search_results[search_id] = combined_results
-        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-        await bot.edit_message_text(
-            chat_id=searching_message.chat.id, 
-            message_id=searching_message.message_id,
-            text=f"🎵 нашел вот {len(combined_results)} треков по запросу '{query}':",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-         print(f"Error during music search for query '{query}': {e}")
-         await bot.edit_message_text(
-             chat_id=searching_message.chat.id, 
-             message_id=searching_message.message_id,
-             text=f"❌ блин, ошибка при поиске музыки: {e}"
-         )
-
-async def search_reddit_videos(query, max_results=50):
-    """Searches Reddit for videos matching the query using yt-dlp."""
-    # Note: yt-dlp might require subreddit context for better results,
-    # ... (rest of search_reddit_videos) ...
-
-async def handle_video_search(message: types.Message, query: str):
-    """Handles video search (YouTube/Reddit) in private chats."""
-    searching_message = await message.answer("🎬 ищу видео (YT/Reddit)..." )
-    search_id = str(uuid.uuid4())
-    try:
-        max_results_per_source = MAX_TRACKS // 2 # Divide budget between YT and Reddit
-        
-        # Need a modified YT search that doesn't filter duration
-        async def search_youtube_videos(query, max_results=50):
-            try:
-                search_opts = {
-                    **ydl_opts,
-                    'default_search': 'ytsearch',
-                    'max_downloads': max_results,
-                    'extract_flat': True,
-                    # Remove audio postprocessor for video search
-                    'postprocessors': [] 
-                }
-                search_opts.pop('preferredcodec', None)
-                search_opts.pop('preferredquality', None)
-                
-                with yt_dlp.YoutubeDL(search_opts) as ydl:
-                    info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-                    if not info or 'entries' not in info: return []
-                    results = []
-                    for entry in info['entries']:
-                        if entry and entry.get('url'): # Basic check for video
-                             # NO duration filter for video search
-                            title = entry.get('title', 'Unknown Title')
-                            # Use uploader/channel_url for consistency
-                            channel = entry.get('uploader', entry.get('channel', 'YouTube'))
-                            results.append({
-                                'title': title,
-                                'channel': channel,
-                                'url': entry.get('url'),
-                                'duration': entry.get('duration', 0),
-                                'source': 'youtube'
-                            })
-                    return results
-            except Exception as e:
-                print(f"An error occurred during YouTube video search: {e}")
-                return []
-
-        # Run searches
-        youtube_results, reddit_results = await asyncio.gather(
-            search_youtube_videos(query, max_results_per_source),
-            search_reddit_videos(query, max_results_per_source)
-        )
-
-        # Combine results (YT first for videos maybe?)
-        combined_results = []
-        for yt_track in youtube_results:
-             combined_results.append(yt_track)
-        for rd_track in reddit_results:
-             combined_results.append(rd_track)
-             
-        if not combined_results:
-            await bot.edit_message_text(
-                 chat_id=searching_message.chat.id, 
-                 message_id=searching_message.message_id,
-                 text="❌ не нашел видео по твоему запросу на YouTube или Reddit."
-            )
-            return
-
-        search_results[search_id] = combined_results
-        # Use the same keyboard function, it will just show titles/channels
-        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-        await bot.edit_message_text(
-            chat_id=searching_message.chat.id, 
-            message_id=searching_message.message_id,
-            text=f"🎬 нашел вот {len(combined_results)} видео по запросу '{query}':",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-         print(f"Error during video search for query '{query}': {e}")
-         await bot.edit_message_text(
-             chat_id=searching_message.chat.id, 
-             message_id=searching_message.message_id,
-             text=f"❌ блин, ошибка при поиске видео: {e}"
-         )
-
-async def handle_special_search(message: types.Message, query: str):
-    """Handles 'special' search (PornHub, XVideos, etc.) in private chats."""
-    searching_message = await message.answer("🔞 ищу special контент (PH/XV/SB/EP)..." )
-    search_id = str(uuid.uuid4())
-    try:
-        # Allocate budget - maybe fewer results per site are okay?
-        max_results_per_site = max(10, MAX_TRACKS // 4) # Example: 10 per site min, or quarter budget
-        
-        ph_results, xv_results, sb_results, ep_results = await asyncio.gather(
-            _search_special_site('phsearch', 'PornHub', query, max_results_per_site),
-            _search_special_site('xvideossearch', 'XVideos', query, max_results_per_site),
-            _search_special_site('spankbangsearch', 'SpankBang', query, max_results_per_site),
-            _search_special_site('epornersearch', 'Eporner', query, max_results_per_site)
-        )
-
-        # Combine results (order doesn't strictly matter here)
-        combined_results = ph_results + xv_results + sb_results + ep_results
-             
-        if not combined_results:
-            await bot.edit_message_text(
-                 chat_id=searching_message.chat.id, 
-                 message_id=searching_message.message_id,
-                 text="❌ не нашел special видео по твоему запросу."
-            )
-            return
-
-        search_results[search_id] = combined_results
-        # Use the same keyboard function
-        keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-        await bot.edit_message_text(
-            chat_id=searching_message.chat.id, 
-            message_id=searching_message.message_id,
-            text=f"🔞 нашел вот {len(combined_results)} special видео по запросу '{query}':",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-         print(f"Error during special search for query '{query}': {e}")
-         await bot.edit_message_text(
-             chat_id=searching_message.chat.id, 
-             message_id=searching_message.message_id,
-             text=f"❌ блин, ошибка при поиске special видео: {e}"
-         )
-
-async def _search_special_site(site_prefix: str, site_name: str, query: str, max_results: int):
-    """Helper function to search a specific 'special' site."""
-    try:
-        search_opts = {
-            **ydl_opts,
-            'default_search': site_prefix,
-            'max_downloads': max_results,
-            'extract_flat': True,
-             # Ensure no audio-specific postprocessing
-            'postprocessors': []
-        }
-        search_opts.pop('preferredcodec', None)
-        search_opts.pop('preferredquality', None)
-
-        with yt_dlp.YoutubeDL(search_opts) as ydl:
-            print(f"[{site_name} Search Debug] Querying: {site_prefix}{max_results}:{query}")
-            info = ydl.extract_info(f"{site_prefix}{max_results}:{query}", download=False)
-            print(f"[{site_name} Search Debug] Raw info: {info}")
-            
-            if not info or 'entries' not in info:
-                 print(f"[{site_name} Search Debug] No entries found.")
-                 return []
-            
-            print(f"[{site_name} Search Debug] Found {len(info['entries'])} potential entries.")
-            results = []
-            for entry in info['entries']:
-                if entry and entry.get('url') and entry.get('_type', '') != 'playlist': # Ensure it's a video entry
-                     # No duration filter
-                     title = entry.get('title', f'{site_name} Video')
-                     # Channel/uploader info might be inconsistent across these sites
-                     channel = entry.get('uploader', site_name)
-                     duration = entry.get('duration', 0)
-                     results.append({
-                         'title': title,
-                         'channel': channel,
-                         'url': entry.get('url'),
-                         'duration': duration,
-                         'source': site_name.lower()
-                     })
-            print(f"[{site_name} Search Debug] Processed {len(results)} valid entries.")
-            return results
-    except Exception as e:
-        print(f"An error occurred during {site_name} search: {e}\n{traceback.format_exc()}")
-        return []
-
-# --- Settings Handlers --- 
-
-def create_settings_keyboard(current_mode: str) -> ReplyKeyboardBuilder:
-    builder = ReplyKeyboardBuilder()
-    modes = {
-        'music': "🎵 Музыка",
-        'video': "🎬 Видео",
-        'special': "🔞 Special"
-    }
-    for mode_key, mode_text in modes.items():
-        # Add a checkmark if it's the current mode
-        prefix = "✅ " if mode_key == current_mode else ""
-        builder.button(text=f"{prefix}{mode_text}")
-    builder.button(text="❌ Закрыть")
-    builder.adjust(3) # Adjust layout to 3 buttons per row
-    return builder.as_markup(resize_keyboard=True)
-
-@dp.message(Command("settings"), F.chat.type == 'private')
-async def cmd_settings(message: types.Message):
-    print(f"[Debug] Received /settings command from user {message.from_user.id} in chat {message.chat.id} (type: {message.chat.type})") # Debug print
-    user_id = message.from_user.id
-    current_mode = user_settings[user_id]
-    mode_text = {'music': 'Музыка', 'video': 'Видео', 'special': 'Special'}.get(current_mode, 'Музыка')
-    keyboard = create_settings_keyboard(current_mode)
-    print(f"[Debug] Created keyboard for user {user_id}: {keyboard}") # Debug print
-    await message.answer(
-        f"⚙️ *Настройки Поиска*\n\nТекущий режим: *{mode_text}*\n\nВыберите режим поиска по умолчанию для этого чата:", 
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
-
-@dp.message(F.chat.type == 'private', F.text.contains("Музыка"))
-async def set_music_mode(message: types.Message):
-    user_id = message.from_user.id
-    user_settings[user_id] = 'music'
-    keyboard = create_settings_keyboard('music')
-    await message.answer("✅ Режим поиска изменен на *Музыка*.", reply_markup=keyboard, parse_mode="Markdown")
-
-@dp.message(F.chat.type == 'private', F.text.contains("Видео"))
-async def set_video_mode(message: types.Message):
-    user_id = message.from_user.id
-    user_settings[user_id] = 'video'
-    keyboard = create_settings_keyboard('video')
-    await message.answer("✅ Режим поиска изменен на *Видео*.", reply_markup=keyboard, parse_mode="Markdown")
-
-@dp.message(F.chat.type == 'private', F.text.contains("Special"))
-async def set_special_mode(message: types.Message):
-    user_id = message.from_user.id
-    user_settings[user_id] = 'special'
-    keyboard = create_settings_keyboard('special')
-    await message.answer("✅ Режим поиска изменен на *Special*.", reply_markup=keyboard, parse_mode="Markdown")
-
-@dp.message(F.chat.type == 'private', F.text == "❌ Закрыть")
-async def close_settings(message: types.Message):
-    await message.answer("Настройки закрыты.", reply_markup=ReplyKeyboardRemove())
 
 async def main():
     await dp.start_polling(bot)
