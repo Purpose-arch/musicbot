@@ -183,7 +183,7 @@ async def search_soundcloud(query, max_results=50):
 
                     results.append({
                         'title': title,
-                        'channel': artist, # Use 'channel' key for consistency
+                        'channel': artist.strip(), # Use 'channel' key for consistency
                         'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
@@ -266,6 +266,142 @@ async def search_bandcamp(query, max_results=50):
     except Exception as e:
         print(f"An error occurred during Bandcamp search: {e}\n{traceback.format_exc()}")
         return []
+
+async def search_video(query, max_results=50):
+    """Searches YouTube for videos using yt-dlp.
+    No duration limits applied.
+    """
+    try:
+        search_opts = {
+            **ydl_opts,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best', # General video format preference
+            'default_search': 'ytsearch',
+            'max_downloads': max_results,
+            'extract_flat': True, # Keep flat for faster searching
+            'postprocessors': [], # No audio extraction needed
+            'quiet': True, # Keep search quiet
+            'no_warnings': True,
+        }
+        
+        with yt_dlp.YoutubeDL(search_opts) as ydl:
+            print(f"[Video Search Debug] Querying: ytsearch{max_results}:{query}")
+            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
+            
+            print(f"[Video Search Debug] Raw info received: {info}") 
+            
+            if not info or 'entries' not in info:
+                print("[Video Search Debug] No info or entries found.")
+                return []
+            
+            print(f"[Video Search Debug] Found {len(info['entries'])} potential entries.")
+            results = []
+            for entry in info['entries']:
+                if entry:
+                    # Basic info extraction
+                    title = entry.get('title', 'Unknown Title')
+                    channel = entry.get('channel', entry.get('uploader', 'Unknown Uploader'))
+                    url = entry.get('url', '')
+                    duration = entry.get('duration', 0) # Keep duration info
+                    
+                    # Skip if essential info is missing
+                    if not url or title == 'Unknown Title': 
+                        continue
+                        
+                    results.append({
+                        'title': title.strip(),
+                        'channel': channel.strip(),
+                        'url': url,
+                        'duration': duration,
+                        'source': 'youtube_video' # Differentiate source if needed
+                    })
+            print(f"[Video Search Debug] Processed {len(results)} valid video entries.")
+            return results
+    except Exception as e:
+        import traceback
+        print(f"An error occurred during Video search: {e}\n{traceback.format_exc()}")
+        return []
+
+async def search_special(query, max_results=50):
+    """Searches Pornhub and XVideos using yt-dlp.
+    No duration limits applied. Results combined.
+    """
+    # Adjust max_results per source
+    max_per_source = max(1, max_results // 2) 
+    
+    ph_results = []
+    xv_results = []
+
+    # --- Pornhub Search --- 
+    try:
+        ph_search_opts = {
+            **ydl_opts,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
+            'default_search': 'phsearch', 
+            'max_downloads': max_per_source,
+            'extract_flat': True,
+            'postprocessors': [],
+            'quiet': True, 
+            'no_warnings': True,
+            'ignoreerrors': True, # Important for these sites
+            'cookiesfrombrowser': ('chrome',), # May help sometimes, optional
+        }
+        with yt_dlp.YoutubeDL(ph_search_opts) as ydl:
+            print(f"[Special Search Debug] Querying Pornhub: phsearch{max_per_source}:{query}")
+            info = ydl.extract_info(f"phsearch{max_per_source}:{query}", download=False)
+            print(f"[Special Search Debug] Pornhub raw info: {info}")
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    if entry:
+                        url = entry.get('url')
+                        title = entry.get('title', 'Unknown Title')
+                        if url and title != 'Unknown Title':
+                            ph_results.append({
+                                'title': title.strip(),
+                                'channel': entry.get('uploader', 'Pornhub'), # Less reliable field
+                                'url': url,
+                                'duration': entry.get('duration', 0),
+                                'source': 'pornhub' 
+                            })
+    except Exception as e:
+        print(f"[Special Search Debug] Error during Pornhub search: {e}\n{traceback.format_exc()}")
+        
+    # --- XVideos Search --- 
+    try:
+        xv_search_opts = {
+            **ydl_opts,
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
+            'default_search': 'xvsearch', 
+            'max_downloads': max_per_source,
+            'extract_flat': True,
+            'postprocessors': [],
+            'quiet': True, 
+            'no_warnings': True,
+            'ignoreerrors': True,
+        }
+        with yt_dlp.YoutubeDL(xv_search_opts) as ydl:
+            print(f"[Special Search Debug] Querying XVideos: xvsearch{max_per_source}:{query}")
+            info = ydl.extract_info(f"xvsearch{max_per_source}:{query}", download=False)
+            print(f"[Special Search Debug] XVideos raw info: {info}")
+            if info and 'entries' in info:
+                for entry in info['entries']:
+                    if entry:
+                        url = entry.get('url')
+                        title = entry.get('title', 'Unknown Title')
+                        if url and title != 'Unknown Title':
+                            xv_results.append({
+                                'title': title.strip(),
+                                'channel': entry.get('uploader', 'XVideos'),
+                                'url': url,
+                                'duration': entry.get('duration', 0),
+                                'source': 'xvideos' 
+                            })
+    except Exception as e:
+        print(f"[Special Search Debug] Error during XVideos search: {e}\n{traceback.format_exc()}")
+        
+    # Combine results (PH first)
+    combined = ph_results + xv_results
+    print(f"[Special Search Debug] Processed {len(combined)} total special entries.")
+    return combined
 
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
@@ -924,18 +1060,73 @@ async def handle_text(message: types.Message):
                         print(f"Failed to edit message after music search error: {edit_err}")
                         
             elif search_mode == 'Видео':
-                # TODO: Implement Video Search (YT/Reddit)
-                await message.answer(f"⏳ Поиск видео по запросу '{query}' (пока не реализовано)...", disable_web_page_preview=True)
-                # Placeholder: Call a future search_video function
-                # results = await search_video(query)
-                # Display results or error
+                searching_message = await message.answer(f"🎬 Ищу видео (YT) по запросу '{query}'...", disable_web_page_preview=True)
+                search_id = str(uuid.uuid4())
+                try:
+                    # Use MAX_TRACKS directly here, as it's the only source
+                    video_results = await search_video(query, MAX_TRACKS) 
+
+                    if not video_results:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text="❌ Видео по такому запросу не найдено."
+                        )
+                    else:
+                        # For video results, we can reuse create_tracks_keyboard 
+                        # It will show title/channel/duration. Callback will trigger URL download.
+                        search_results[search_id] = video_results 
+                        keyboard = create_tracks_keyboard(video_results, 0, search_id)
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"🎬 Найдено {len(video_results)} видео по запросу '{query}':",
+                            reply_markup=keyboard
+                        )
+                except Exception as e:
+                    print(f"Error during private video search for query '{query}': {e}\n{traceback.format_exc()}")
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"❌ Ошибка при поиске видео: {e}"
+                        )
+                    except Exception as edit_err:
+                        print(f"Failed to edit message after video search error: {edit_err}")
                 
             elif search_mode == 'Special':
-                 # TODO: Implement Special Search (PH/XV etc.)
-                await message.answer(f"⏳ Поиск Special по запросу '{query}' (пока не реализовано)...", disable_web_page_preview=True)
-                # Placeholder: Call a future search_special function
-                # results = await search_special(query)
-                # Display results or error
+                searching_message = await message.answer(f"🌶️ Ищу Special (PH/XV) по запросу '{query}'...", disable_web_page_preview=True)
+                search_id = str(uuid.uuid4())
+                try:
+                    # Use MAX_TRACKS, search_special will divide it internally
+                    special_results = await search_special(query, MAX_TRACKS)
+
+                    if not special_results:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text="❌ Special видео по такому запросу не найдено."
+                        )
+                    else:
+                        # Reuse keyboard creation for special results
+                        search_results[search_id] = special_results 
+                        keyboard = create_tracks_keyboard(special_results, 0, search_id)
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"🌶️ Найдено {len(special_results)} Special видео по запросу '{query}':",
+                            reply_markup=keyboard
+                        )
+                except Exception as e:
+                    print(f"Error during private special search for query '{query}': {e}\n{traceback.format_exc()}")
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id, 
+                            message_id=searching_message.message_id,
+                            text=f"❌ Ошибка при поиске Special: {e}"
+                        )
+                    except Exception as edit_err:
+                        print(f"Failed to edit message after special search error: {edit_err}")
 
             return # End of private search logic
 
