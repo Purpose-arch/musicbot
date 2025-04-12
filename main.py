@@ -15,6 +15,7 @@ import yt_dlp
 import uuid
 import time
 import traceback
+from functools import partial
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -56,6 +57,98 @@ ydl_opts = {
     # 'outtmpl' is better handled dynamically in download_track.
     'ffmpeg_location': '/usr/bin/ffmpeg',
 }
+
+# --- Progress Bar Globals and Helpers ---
+# Store last update times/percentages per message to throttle
+# Key: message_id, Value: {'last_update': timestamp, 'last_percent': float}
+progress_status = {}
+
+async def _update_progress_message(bot: Bot, chat_id: int, message_id: int, text: str):
+    """Safely edits a message, ignoring 'message is not modified' errors."""
+    try:
+        await bot.edit_message_text(
+            text=text,
+            chat_id=chat_id,
+            message_id=message_id
+        )
+    except Exception as e:
+        # Ignore errors specifically about message not being modified
+        if 'message is not modified' not in str(e).lower():
+            print(f"Error updating progress message {message_id}: {e}")
+
+def progress_hook_factory(bot: Bot, chat_id: int, message_id: int):
+    """Creates a progress hook closure for yt-dlp."""
+    # Initialize status for this message if not present
+    if message_id not in progress_status:
+        progress_status[message_id] = {'last_update': 0, 'last_percent': -1}
+
+    def _hook(d):
+        hook_status = d.get('status')
+        # print(f"Hook called for {message_id}: {hook_status}") # Debug hook calls
+        if hook_status == 'downloading':
+            total_bytes_str = d.get('_total_bytes_str') # Already formatted string
+            downloaded_bytes_str = d.get('_downloaded_bytes_str') # Already formatted string
+            percent_str = d.get('_percent_str', '0.0%') # Already formatted percentage
+            eta_str = d.get('_eta_str', '??:??') # Already formatted ETA
+            speed_str = d.get('_speed_str', '?? B/s') # Already formatted speed
+            
+            # Extract numeric percent for throttling
+            try:
+                 # Remove ANSI codes if present (though unlikely via hook dict)
+                 cleaned_percent_str = percent_str.strip().replace('%', '')
+                 percent = float(cleaned_percent_str)
+            except ValueError:
+                 percent = progress_status.get(message_id, {}).get('last_percent', -1) # Use last known if conversion fails
+                
+            now = time.time()
+            last_status = progress_status.get(message_id, {'last_update': 0, 'last_percent': -1})
+
+            # Throttle: Update every 5% or every 2.5 seconds
+            # Be slightly more aggressive than 3s to feel more responsive
+            if (percent - last_status['last_percent'] >= 5) or (now - last_status['last_update'] >= 2.5):
+                
+                # Use pre-formatted strings from yt-dlp where available
+                progress_text = f"⏳ Качаю: {percent_str.strip()}"
+                if total_bytes_str:
+                    progress_text += f" из {total_bytes_str.strip()}"
+                progress_text += f" @ {speed_str.strip()} (ETA: {eta_str.strip()})"
+                
+                # Ensure text fits in Telegram message limits (though unlikely for progress)
+                if len(progress_text) > 4000: 
+                    progress_text = progress_text[:4000] + "..."
+
+                # Schedule the message update in the main event loop
+                # Use Bot.get_current() if bot instance isn't directly available
+                current_bot = bot # Assuming bot is accessible here
+                if current_bot:
+                    asyncio.create_task(_update_progress_message(current_bot, chat_id, message_id, progress_text))
+                else:
+                    print("Error: Bot instance not available in progress hook context.")
+
+                # Update status cache
+                progress_status[message_id] = {'last_update': now, 'last_percent': percent}
+
+        elif hook_status == 'finished':
+            print(f"Download finished hook for message {message_id}")
+             # Optionally, update message to "Processing..." - but download_track already does this after executor
+            # asyncio.create_task(_update_progress_message(bot, chat_id, message_id, "⚙️ Обработка..."))
+            # Clean up progress status for this message once finished
+            if message_id in progress_status:
+                try:
+                    del progress_status[message_id]
+                except KeyError:
+                    pass # Already deleted, maybe by another hook call
+        elif hook_status == 'error':
+            print(f"Download error hook for message {message_id}")
+            # Clean up progress status
+            if message_id in progress_status:
+                 try:
+                    del progress_status[message_id]
+                 except KeyError:
+                    pass # Already deleted
+
+    return _hook
+# --- End Progress Bar Helpers ---
 
 def extract_title_and_artist(title):
     """Улучшенное извлечение названия трека и исполнителя"""
@@ -178,7 +271,7 @@ async def search_soundcloud(query, max_results=50):
 
                     results.append({
                         'title': title,
-                        'channel': artist, # Use 'channel' key for consistency
+                        'channel': artist.strip(), # Use 'channel' key for consistency
                         'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
@@ -400,7 +493,8 @@ async def download_track(user_id, track_data, callback_message, status_message):
             'nocheckcertificate': True,
             'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
             'extract_flat': False, # Нужно для скачивания, а не только для поиска
-            'ffmpeg_location': '/usr/bin/ffmpeg' # Оставляем явное указание пути
+            'ffmpeg_location': '/usr/bin/ffmpeg', # Оставляем явное указание пути
+            'progress_hooks': [progress_hook_factory(bot, callback_message.chat.id, status_message.message_id)]
         }
         
         expected_mp3_path = base_temp_path + '.mp3'
@@ -541,6 +635,13 @@ async def download_track(user_id, track_data, callback_message, status_message):
                 await process_download_queue(user_id)
             else:
                  print(f"Download queue for user {user_id} is empty or user not found.")
+        # Clean up progress status in case hook didn't catch 'finished' or 'error'
+        if status_message and status_message.message_id in progress_status:
+            try:
+                del progress_status[status_message.message_id]
+                print(f"Cleaned up progress status for message {status_message.message_id} in finally block.")
+            except KeyError:
+                pass # Already deleted
 
 def set_mp3_metadata(file_path, title, artist):
     try:
@@ -871,6 +972,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Add merge output format if separate streams are downloaded
         'merge_output_format': 'mp4', 
         # No audio-specific postprocessor here initially
+        # --- Add progress hook ---
+        'progress_hooks': [progress_hook_factory(bot, status_message.chat.id, status_message.message_id)]
     }
 
     try:
@@ -968,7 +1071,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 duration=int(duration) if duration else None,
                 width=width if width else None,
                 height=height if height else None,
-                caption=safe_title # Use title as caption for video
+                # caption=safe_title # REMOVED caption
                 # caption=f"{safe_title}\nСкачано с: {url}" # Optional detailed caption
             )
         else:
@@ -1032,6 +1135,14 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     
         if not cleaned_a_file:
             print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
+            
+        # Clean up progress status
+        if status_message and status_message.message_id in progress_status:
+            try:
+                del progress_status[status_message.message_id]
+                print(f"Cleaned up progress status for message {status_message.message_id} in finally block (URL download).")
+            except KeyError:
+                pass # Already deleted
 
 async def main():
     await dp.start_polling(bot)
