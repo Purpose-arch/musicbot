@@ -1008,9 +1008,19 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         )
         print(f"[URL Download] Finished blocking download call for: {url}")
         
+        # --- Log directory contents for debugging --- 
+        try:
+            files_in_temp = os.listdir(temp_dir)
+            relevant_files = [f for f in files_in_temp if f.startswith(f"media_{download_uuid}")]
+            print(f"[URL Download Debug] Files found in temp dir ({temp_dir}) matching prefix \"media_{download_uuid}\": {relevant_files}")
+        except Exception as listdir_err:
+            print(f"[URL Download Debug] Error listing temp directory {temp_dir}: {listdir_err}")
+        # --- End logging ---
+            
         # --- 3. Find the actual downloaded file --- 
         # yt-dlp might create .mp4, .mkv, .webm, .mp3, .m4a etc.
-        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        # Expanded list slightly
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac', '.ts'] 
         for ext in possible_extensions:
             potential_path = base_temp_path + ext
             if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
