@@ -1061,6 +1061,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # --- 4. Determine Type and Send --- 
         is_audio = file_extension in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
         is_video = file_extension in ['.mp4', '.mkv', '.webm', '.mov', '.avi']
+        is_image = file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.webp'] # Add image check
 
         # Use extracted info for title/artist/dimensions if available
         title = extracted_info.get('title', 'Downloaded Media') if extracted_info else 'Downloaded Media'
@@ -1074,7 +1075,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         safe_title = safe_title[:150] if safe_title else 'media'
 
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        sending_message = await original_message.answer(f"📤 отправляю {('аудио' if is_audio else 'видео' if is_video else 'файл')}")
+        # Update sending message text
+        file_type_str = 'аудио' if is_audio else 'фото' if is_image else 'видео' if is_video else 'файл'
+        sending_message = await original_message.answer(f"📤 отправляю {file_type_str}")
         
         if is_audio:
             print(f"[URL Download] Sending as Audio: {actual_downloaded_path}")
@@ -1091,6 +1094,13 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 duration=int(duration) if duration else None,
                 # caption=f"Скачано с: {url}" # Optional caption
             )
+        elif is_image: # Add block for sending photos
+             print(f"[URL Download] Sending as Photo: {actual_downloaded_path}")
+             await bot.send_photo(
+                 chat_id=original_message.chat.id,
+                 photo=FSInputFile(actual_downloaded_path)
+                 # caption=safe_title # Captions are allowed for photos, but keeping it removed based on previous request
+             )
         elif is_video:
             print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
             await bot.send_video(
@@ -1192,7 +1202,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Also attempt cleanup based on base_temp_path, just in case 
         # (e.g., if download failed before path was confirmed, or intermediate files left)
         print(f"[URL Download] Attempting additional cleanup for base path: {base_temp_path}")
-        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        # Add image extensions to cleanup as well
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac', '.jpg', '.jpeg', '.png', '.gif', '.webp']
         possible_extensions.extend([".mp4.part", ".webm.part", ".mkv.part", ".ytdl", ".part"])
         
         cleaned_a_file = False
