@@ -1477,7 +1477,21 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     failed_initial_parse_count += 1
                     continue
 
-                entry_url = entry.get('url')
+                # --- Get URL for the track (YouTube playlist specific logic) ---
+                entry_url = entry.get('webpage_url')
+                if not entry_url:
+                    video_id = entry.get('id')
+                    if video_id:
+                        entry_url = f"https://www.youtube.com/watch?v={video_id}"
+                        print(f"[Playlist Prep] Using constructed URL: {entry_url}")
+                    else:
+                        # If no webpage_url and no id, we cannot proceed
+                        print(f"[Playlist Prep DEBUG] Skipping entry. Reason: Missing webpage_url and id.")
+                        print(f"[Playlist Prep DEBUG] Entry data: {entry}")
+                        failed_initial_parse_count += 1
+                        continue
+                # -------------------------------------------------------------
+
                 entry_title = entry.get('title', None)
                 # entry_duration = entry.get('duration', 0) # Keep duration if needed later, but don't filter here
 
@@ -1526,15 +1540,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
                 # Final validation before queuing
                 if not entry_url or not entry_title or entry_title == 'Unknown Title': # Check for None/empty title too
-                    # --- ADDED DEBUG LOGGING --- 
-                    reason = ""
-                    if not entry_url: reason += "Missing URL. "
-                    if not entry_title: reason += "Missing Title. "
-                    if entry_title == 'Unknown Title': reason += "Title is 'Unknown Title'."
-                    print(f"[Playlist Prep DEBUG] Skipping entry. Reason: {reason.strip()}")
-                    print(f"[Playlist Prep DEBUG] Entry data: {entry}")
-                    # --------------------------- 
-                    print(f"[Playlist Prep] Warning: Skipping entry in '{playlist_title}' due to missing URL or essential Title: {entry}")
+                    # Removed detailed debug logging here as URL issue is handled above
+                    print(f"[Playlist Prep] Warning: Skipping entry in '{playlist_title}' due to missing URL or essential Title after processing: {entry}")
                     failed_initial_parse_count += 1
                     continue
 
