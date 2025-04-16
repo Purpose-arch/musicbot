@@ -396,6 +396,13 @@ async def process_download_queue(user_id):
         )
         download_tasks[user_id][track_data["url"]] = task
 
+def _blocking_download_and_convert(url, download_opts):
+    """Helper function to run blocking yt-dlp download and return info dict."""
+    with yt_dlp.YoutubeDL(download_opts) as ydl:
+        # Use extract_info with download=True to get info dict with filepath
+        info_dict = ydl.extract_info(url, download=True)
+        return info_dict
+
 # Adjust download_track signature and logic
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
     """Downloads a single track. If part of a playlist (playlist_download_id is set),
