@@ -941,9 +941,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None # Path to the final downloaded file
     
-    # Options for general media download (prefer best video+audio, fallback to best single file)
+    # Options for general media download (Try 'best' first, then specific video/audio combos)
     media_ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best/best[ext=mp4]/best',
+        'format': 'best/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]', # Added 'best/' at the beginning
         'outtmpl': base_temp_path + '.%(ext)s', # Let ytdl determine extension
         'quiet': False,
         'verbose': True,
