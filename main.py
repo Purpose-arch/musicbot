@@ -8,13 +8,9 @@ import traceback
 import re
 from collections import defaultdict
 from dotenv import load_dotenv
-import aiogram # <--- Add this import
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile,
-    ReplyKeyboardMarkup, KeyboardButton # Added ReplyKeyboard imports
-)
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
@@ -40,28 +36,6 @@ download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
 MAX_PARALLEL_DOWNLOADS = 5  # Максимальное количество одновременных загрузок
-
-# --- NEW: Search Mode State ---
-user_search_mode = {} # user_id: 'tracks' or 'playlists'
-MODE_TRACKS = 'tracks'
-MODE_PLAYLISTS = 'playlists'
-BUTTON_TEXT_TO_PLAYLISTS = "🎶 Искать плейлисты"
-BUTTON_TEXT_TO_TRACKS = "🎧 Искать треки"
-
-# --- NEW: Reply Keyboard Function ---
-def get_mode_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    current_mode = user_search_mode.get(user_id, MODE_TRACKS) # Default to tracks
-    if current_mode == MODE_TRACKS:
-        button_text = BUTTON_TEXT_TO_PLAYLISTS
-    else:
-        button_text = BUTTON_TEXT_TO_TRACKS
-        
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=button_text)]],
-        resize_keyboard=True,
-        one_time_keyboard=False # Keep keyboard visible
-    )
-    return keyboard
 
 # Настройки yt-dlp
 ydl_opts = {
@@ -205,7 +179,7 @@ async def search_soundcloud(query, max_results=50):
 
                     results.append({
                         'title': title,
-                        'channel': artist.strip(), # Use 'channel' key for consistency
+                        'channel': artist, # Use 'channel' key for consistency
                         'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
@@ -587,9 +561,6 @@ def set_mp3_metadata(file_path, title, artist):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    user_search_mode[user_id] = MODE_TRACKS # Set default mode
-    keyboard = get_mode_keyboard(user_id)
     await message.answer(
         "🐈‍⬛ приветик я\n\n"
         "✅ персональный\n"
@@ -597,37 +568,28 @@ async def cmd_start(message: types.Message):
         "✅ скачивающий\n"
         "✅ юный\n"
         "✅ новобранец\n\n"
-        "🎵 ищу и скачиваю музыку по названию (режим по умолчанию)\n"
+        "🎵 ищу и скачиваю музыку по названию\n"
         "🔗 или просто скинь мне ссылку на видео/аудио и я попробую скачать\n\n"
-        "👇 Используй кнопку ниже для переключения режима поиска (треки/плейлисты).\n\n"
         "👥 также есть возможность добавить бота в группу и использовать команду\n"
         "«музыка (запрос)»\n"
-        "либо отправить ссылку на видео/аудио там",
-        reply_markup=keyboard # Send keyboard
+        "либо отправить ссылку на видео/аудио там"
     )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    user_id = message.from_user.id
-    keyboard = get_mode_keyboard(user_id)
     # Using triple quotes for cleaner multiline string
     help_text = """*как пользоваться ботом* 
 
-1️⃣ **поиск музыки** просто напиши название трека или исполнителя (убедись что выбран режим *Искать треки*) я поищу на soundcloud bandcamp и youtube и покажу список
+1️⃣ **поиск музыки** просто напиши название трека или исполнителя я поищу на soundcloud bandcamp и youtube и покажу список
 
-▶️ **поиск плейлистов/альбомов** нажми кнопку *Искать плейлисты* затем напиши запрос я поищу плейлисты на youtube и soundcloud
-
-2️⃣ **скачивание по ссылке** отправь мне прямую ссылку на страницу с видео аудио или плейлистом (youtube soundcloud vk insta tiktok и многих других) я попытаюсь скачать медиа (плейлисты пока качаются только через поиск)
-
-👇 **переключение режима** кнопка внизу переключает между поиском треков и плейлистов для обычных текстовых запросов
+2️⃣ **скачивание по ссылке** отправь мне прямую ссылку на страницу с видео или аудио (например с youtube soundcloud vk insta tiktok и многих других) я попытаюсь скачать медиа
 
 *команды*
 /start - показать приветственное сообщение
 /help - показать это сообщение
-/search [запрос] - искать музыку по запросу (всегда ищет треки)
-/playlist [запрос] - искать плейлисты по запросу (всегда ищет плейлисты)
-/cancel - отменить активные загрузки (из поиска/плейлистов)"""
-    await message.answer(help_text, parse_mode="Markdown", reply_markup=keyboard)
+/search [запрос] - искать музыку по запросу
+/cancel - отменить активные загрузки (из поиска)"""
+    await message.answer(help_text, parse_mode="Markdown")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
@@ -826,22 +788,8 @@ async def handle_text(message: types.Message):
     if message.text.startswith('/'):
         return
     
-    text = message.text # Use original case for button check
-    text_lower = text.lower().strip()
+    text_lower = message.text.lower().strip()
     chat_type = message.chat.type
-    user_id = message.from_user.id
-
-    # --- Reply Keyboard Button Handling --- 
-    if text == BUTTON_TEXT_TO_PLAYLISTS:
-        user_search_mode[user_id] = MODE_PLAYLISTS
-        keyboard = get_mode_keyboard(user_id)
-        await message.answer("✅ Режим переключен на поиск плейлистов/альбомов.", reply_markup=keyboard)
-        return
-    elif text == BUTTON_TEXT_TO_TRACKS:
-        user_search_mode[user_id] = MODE_TRACKS
-        keyboard = get_mode_keyboard(user_id)
-        await message.answer("✅ Режим переключен на поиск треков.", reply_markup=keyboard)
-        return
 
     # --- Group Chat Logic --- 
     if chat_type in ('group', 'supergroup'):
@@ -873,143 +821,59 @@ async def handle_text(message: types.Message):
             await handle_url_download(message, url_check) # Pass URL directly
             return
         else:
-            # Determine search type based on mode
-            current_mode = user_search_mode.get(user_id, MODE_TRACKS)
-            
-            if current_mode == MODE_TRACKS:
-                # --- Perform TRACK search --- 
-                query = text
-                searching_message = await message.answer("🔍 ищу музыку...", reply_markup=get_mode_keyboard(user_id))
-                search_id = str(uuid.uuid4())
-                try:
-                    max_results_per_source = MAX_TRACKS // 3
-                    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-                        search_youtube(query, max_results_per_source),
-                        search_soundcloud(query, max_results_per_source),
-                        search_bandcamp(query, max_results_per_source)
+            # Treat as search query - Indent this whole block
+            query = message.text
+            searching_message = await message.answer("🔍 ищу музыку...")
+            search_id = str(uuid.uuid4())
+            # Search all sources concurrently
+            try:
+                max_results_per_source = MAX_TRACKS // 3
+                youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                    search_youtube(query, max_results_per_source),
+                    search_soundcloud(query, max_results_per_source),
+                    search_bandcamp(query, max_results_per_source)
+                )
+
+                # Prioritize SoundCloud -> Bandcamp -> YouTube results
+                combined_results = []
+                for sc_track in soundcloud_results:
+                    if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                    combined_results.append(sc_track)
+                for bc_track in bandcamp_results:
+                    if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+                    combined_results.append(bc_track)
+                for yt_track in youtube_results:
+                    if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                    combined_results.append(yt_track)
+
+                if not combined_results:
+                    await bot.edit_message_text(
+                         chat_id=searching_message.chat.id, 
+                         message_id=searching_message.message_id,
+                         text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
                     )
+                    return # Correctly indented return
+    
+                search_results[search_id] = combined_results
+                keyboard = create_tracks_keyboard(combined_results, 0, search_id)
+                await bot.edit_message_text(
+                    chat_id=searching_message.chat.id, 
+                    message_id=searching_message.message_id,
+                    text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                 print(f"Error during private search for query '{query}': {e}")
+                 await bot.edit_message_text(
+                     chat_id=searching_message.chat.id, 
+                     message_id=searching_message.message_id,
+                     text=f"❌ блин ошибка при поиске: {e}"
+                 )
+            return # End of private search logic
 
-                    # Combine and prioritize track results
-                    combined_results = []
-                    for sc_track in soundcloud_results:
-                        if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
-                        combined_results.append(sc_track)
-                    for bc_track in bandcamp_results:
-                        if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-                        combined_results.append(bc_track)
-                    for yt_track in youtube_results:
-                        if 'source' not in yt_track: yt_track['source'] = 'youtube'
-                        combined_results.append(yt_track)
-
-                    if not combined_results:
-                        # Keep editing for "not found"
-                        await bot.edit_message_text(
-                             chat_id=searching_message.chat.id,
-                             message_id=searching_message.message_id,
-                             text="❌ ничего не нашел по твоему запросу (треки)"
-                        )
-                        return
-        
-                    # On success: Delete searching message and send new one
-                    search_results[search_id] = combined_results
-                    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-                    try:
-                        await bot.delete_message(searching_message.chat.id, searching_message.message_id)
-                    except Exception as del_err:
-                         print(f"Warning: Could not delete searching message: {del_err}")
-                         
-                    await message.answer(
-                        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
-                        reply_markup=keyboard
-                    )
-                except Exception as e:
-                     print(f"Error during private track search for query '{query}': {e}")
-                     error_text = f"❌ блин ошибка при поиске треков: {e}"
-                     # Try editing first, fallback to delete+send
-                     try:
-                         await bot.edit_message_text(
-                             chat_id=searching_message.chat.id,
-                             message_id=searching_message.message_id,
-                             text=error_text
-                         )
-                     except aiogram.exceptions.TelegramBadRequest:
-                         print("Failed to edit message for track search error, sending new one.")
-                         try:
-                            await bot.delete_message(searching_message.chat.id, searching_message.message_id)
-                         except Exception as del_err:
-                             print(f"Warning: Could not delete searching message before sending error: {del_err}")
-                         await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
-                     except Exception as other_edit_err:
-                         print(f"Unexpected error editing message: {other_edit_err}")
-                         # Optionally try sending new message here too as fallback
-                         try:
-                             await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
-                         except Exception as final_send_err:
-                              print(f"Failed even to send final error message: {final_send_err}")
-
-            elif current_mode == MODE_PLAYLISTS:
-                # --- Perform PLAYLIST search (reuse logic from cmd_playlist_search) ---
-                query = text
-                searching_message = await message.answer("🔍 ищу плейлисты/альбомы...", reply_markup=get_mode_keyboard(user_id))
-                search_id = str(uuid.uuid4())
-                try:
-                    yt_playlists, sc_playlists = await asyncio.gather(
-                        search_youtube_playlists(query),
-                        search_soundcloud_playlists(query)
-                    )
-                    combined_results = sc_playlists + yt_playlists
-
-                    if not combined_results:
-                        # Keep editing for "not found"
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id,
-                            message_id=searching_message.message_id,
-                            text="❌ не нашел плейлистов/альбомов по твоему запросу"
-                        )
-                        return
-                    
-                    # On success: Delete searching message and send new one
-                    search_results[search_id] = combined_results
-                    keyboard = create_playlists_keyboard(combined_results, 0, search_id)
-                    try:
-                         await bot.delete_message(searching_message.chat.id, searching_message.message_id)
-                    except Exception as del_err:
-                         print(f"Warning: Could not delete searching message: {del_err}")
-                         
-                    await message.answer(
-                        f"💿 нашел вот {len(combined_results)} плейлистов/альбомов по запросу '{query}' ⬇",
-                        reply_markup=keyboard
-                    )
-                except Exception as e:
-                    print(f"Error during private playlist search for query '{query}': {e}")
-                    error_text = f"❌ блин ошибка при поиске плейлистов: {e}"
-                    # Try editing first, fallback to delete+send
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=searching_message.chat.id,
-                            message_id=searching_message.message_id,
-                            text=error_text
-                        )
-                    except aiogram.exceptions.TelegramBadRequest:
-                        print("Failed to edit message for playlist search error, sending new one.")
-                        try:
-                            await bot.delete_message(searching_message.chat.id, searching_message.message_id)
-                        except Exception as del_err:
-                             print(f"Warning: Could not delete searching message before sending error: {del_err}")
-                        await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
-                    except Exception as other_edit_err:
-                         print(f"Unexpected error editing message: {other_edit_err}")
-                         # Optionally try sending new message here too as fallback
-                         try:
-                             await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
-                         except Exception as final_send_err:
-                              print(f"Failed even to send final error message: {final_send_err}")
-
-            return # End of private chat text processing
-
-    # Fallback or other chat types (should not happen with current logic)
-    return
-
+    # If chat type is somehow neither private nor group/supergroup, do nothing
+        return
+    
 async def handle_url_download(message: types.Message, url: str):
     """Handles messages identified as URLs (or via 'медиакот') to initiate download."""
     # Use reply for group trigger, answer for direct URL in private
@@ -1057,8 +921,8 @@ async def handle_group_search(message: types.Message, query: str):
             chat_id=status_message.chat.id,
             message_id=status_message.message_id,
             text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
-            reply_markup=keyboard
-        )
+        reply_markup=keyboard
+    )
 
     except Exception as e:
         print(f"Error during group search for query '{query}': {e}")
@@ -1098,7 +962,15 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # --- 1. Get Info (Optional but good for metadata/title) --- 
         extracted_info = None
         try:
-            with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'nocheckcertificate': True, 'ignoreerrors': True}) as ydl:
+            # Use slightly different opts just for info extraction to avoid downloading accidentally
+            info_opts = {
+                'quiet': True, 
+                'no_warnings': True, 
+                'nocheckcertificate': True, 
+                'ignoreerrors': True, 
+                'extract_flat': False # Need full entries for playlist detection
+            }
+            with yt_dlp.YoutubeDL(info_opts) as ydl:
                 extracted_info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
                 if not extracted_info:
                     print(f"[URL Download] Could not extract info for {url}")
@@ -1106,160 +978,199 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             print(f"[URL Download] Error extracting info for {url}: {info_err}")
             # Continue anyway, try downloading
 
-        # --- 2. Download --- 
-        await bot.edit_message_text(
-            f"⏳ качаю медиа",
-            chat_id=status_message.chat.id,
-            message_id=status_message.message_id
-        )
-        
-        print(f"\n[URL Download] Starting download for: {url}")
-        print(f"[URL Download] Using download options: {media_ydl_opts}")
+        # --- NEW: Check if it's a playlist BEFORE attempting single download ---
+        if extracted_info and extracted_info.get('_type') == 'playlist':
+            playlist_title = extracted_info.get('title', 'Неизвестный плейлист')
+            entries = extracted_info.get('entries', [])
+            user_id = original_message.from_user.id # Get user_id here
 
-        # Create a stricter options copy for the actual download attempt
-        download_specific_opts = media_ydl_opts.copy()
-        download_specific_opts['ignoreerrors'] = False # Make download attempt strict
+            if not entries:
+                await bot.edit_message_text(
+                    f"❌ Плейлист '{playlist_title}' пуст или не удалось получить список треков.",
+                    chat_id=status_message.chat.id, 
+                    message_id=status_message.message_id
+                )
+                return # Exit function, cleanup will happen in finally block
 
-        # Use the reusable blocking download function
-        download_result_info = await loop.run_in_executor(
-            None, 
-            _blocking_download_and_convert, # Now returns info dict
-            url,
-            download_specific_opts # Pass strict options
-        )
-        print(f"[URL Download] Finished blocking download call for: {url}")
-        
-        # -- DEBUG: Log the returned info dict --
-        print(f"[URL Download Debug] Full download_result_info:\n{json.dumps(download_result_info, indent=2, default=str)}")
-        
-        # --- 3. Find the actual downloaded file --- 
-        # Extract filepath from the returned info dict
-        try:
-            # The filepath is usually in the 'requested_downloads' list
-            if download_result_info and download_result_info.get('requested_downloads'):
-                 actual_downloaded_path = download_result_info['requested_downloads'][0]['filepath']
-                 print(f"[URL Download] Found downloaded file via info dict: {actual_downloaded_path}")
-                 if not os.path.exists(actual_downloaded_path) or os.path.getsize(actual_downloaded_path) == 0:
-                      print("[URL Download] Warning: Filepath from info dict does not exist or is empty.")
-                      actual_downloaded_path = None # Reset if invalid
-            else:
-                 print("[URL Download] Warning: 'requested_downloads' not found in download result info.")
-
-        except (KeyError, IndexError, TypeError) as e:
-            print(f"[URL Download] Error extracting filepath from download info: {e}")
-            actual_downloaded_path = None
-
-        # Fallback: If filepath extraction failed, try the old method (less reliable)
-        if not actual_downloaded_path:
-            print("[URL Download] Falling back to searching for file by extension.")
-            possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
-            for ext in possible_extensions:
-                potential_path = base_temp_path + ext
-                if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
-                    actual_downloaded_path = potential_path
-                    print(f"[URL Download] Found downloaded file via fallback search: {actual_downloaded_path}")
-                    break
-                
-        # If still no path found after both methods, raise error
-        if not actual_downloaded_path:
-             # Check for .part file as well
-             part_file = base_temp_path + ".mp4.part" # Common for merged files
-             if os.path.exists(part_file):
-                 print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
-                 # Try renaming? Risky.
-                 
-             # -- DEBUG: List directory contents before failing --
-             try:
-                 print(f"[URL Download Debug] Listing contents of temp dir ({temp_dir}) before raising error:")
-                 dir_contents = os.listdir(temp_dir)
-                 print(f"[URL Download Debug] Contents: {dir_contents}")
-             except Exception as list_err:
-                 print(f"[URL Download Debug] Failed to list temp dir contents: {list_err}")
-                 
-             raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями")
-
-        # This part should only execute if actual_downloaded_path WAS found
-        temp_path = actual_downloaded_path # Keep track for cleanup
-        file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
-        print(f"[URL Download] File extension: {file_extension}")
-
-        # --- NEW: Check File Size BEFORE Sending ---
-        file_size_bytes = os.path.getsize(actual_downloaded_path)
-        # Telegram Bot API limit is 50 MB for local file uploads
-        telegram_limit_bytes = 50 * 1024 * 1024 
-        if file_size_bytes > telegram_limit_bytes:
-             file_size_mb = file_size_bytes / (1024 * 1024)
-             print(f"[URL Download] ERROR: File too large ({file_size_mb:.2f} MB) for Telegram limit (50 MB).")
-             raise Exception(f"скачанный файл слишком большой ({file_size_mb:.1f} мб) телеграм разрешает ботам загружать файлы до 50 мб")
-        else:
-             print(f"[URL Download] File size ({file_size_bytes / (1024 * 1024):.2f} MB) is within Telegram limit.")
-             
-        # --- 4. Determine Type and Send --- 
-        is_audio = file_extension in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
-        is_video = file_extension in ['.mp4', '.mkv', '.webm', '.mov', '.avi']
-        is_image = file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.webp'] # Add image check
-
-        # Use extracted info for title/artist/dimensions if available
-        title = extracted_info.get('title', 'Downloaded Media') if extracted_info else 'Downloaded Media'
-        artist = extracted_info.get('uploader', extracted_info.get('artist', None)) if extracted_info else None
-        duration = extracted_info.get('duration', 0) if extracted_info else 0
-        width = extracted_info.get('width', 0) if extracted_info else 0
-        height = extracted_info.get('height', 0) if extracted_info else 0
-        
-        # Sanitize title slightly
-        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-', ' ') else '_' for c in title).strip()
-        safe_title = safe_title[:150] if safe_title else 'media'
-
-        await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        # Update sending message text
-        file_type_str = 'аудио' if is_audio else 'фото' if is_image else 'видео' if is_video else 'файл'
-        sending_message = await original_message.answer(f"📤 отправляю {file_type_str}")
-        
-        if is_audio:
-            print(f"[URL Download] Sending as Audio: {actual_downloaded_path}")
-            # Try setting metadata for MP3
-            performer = artist if artist else None
-            if file_extension == '.mp3':
-                 set_mp3_metadata(actual_downloaded_path, safe_title, performer if performer else "Unknown Artist")
-                 
-            await bot.send_audio(
-                chat_id=original_message.chat.id,
-                audio=FSInputFile(actual_downloaded_path),
-                title=safe_title,
-                performer=performer,
-                duration=int(duration) if duration else None,
-                # caption=f"Скачано с: {url}" # Optional caption
-            )
-        elif is_image: # Add block for sending photos
-             print(f"[URL Download] Sending as Photo: {actual_downloaded_path}")
-             await bot.send_photo(
-                 chat_id=original_message.chat.id,
-                 photo=FSInputFile(actual_downloaded_path)
-                 # caption=safe_title # Captions are allowed for photos, but keeping it removed based on previous request
-             )
-        elif is_video:
-            print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
-            await bot.send_video(
-                chat_id=original_message.chat.id,
-                video=FSInputFile(actual_downloaded_path),
-                duration=int(duration) if duration else None,
-                width=width if width else None,
-                height=height if height else None,
-                # caption=safe_title # REMOVED caption
-                # caption=f"{safe_title}\nСкачано с: {url}" # Optional detailed caption
-            )
-        else:
-            print(f"[URL Download] Sending as Document (unknown type): {actual_downloaded_path}")
-            # Fallback: send as document if type is unknown
-            await bot.send_document(
-                chat_id=original_message.chat.id,
-                document=FSInputFile(actual_downloaded_path)
-                # caption=safe_title # REMOVED caption
-            )
+            # Limit the number of tracks from a playlist
+            max_items_to_queue = MAX_TRACKS # Use existing constant
+            original_count = len(entries)
+            if original_count > max_items_to_queue:
+                # Send a separate message about the limit, don't edit the status message yet
+                await original_message.answer(f"⚠️ В плейлисте '{playlist_title}' {original_count} треков. Будет добавлено только {max_items_to_queue} в очередь.")
+                entries = entries[:max_items_to_queue]
             
-        print(f"[URL Download] Media sent successfully. Deleting sending message.")
-        await bot.delete_message(chat_id=sending_message.chat.id, message_id=sending_message.message_id)
-        print(f"[URL Download] Finished processing URL: {url}")
+            items_to_process_count = len(entries) # Count after potentially slicing
+            
+            await bot.edit_message_text(
+                f"⏳ Обнаружен плейлист '{playlist_title}'. Добавляю {items_to_process_count} треков в очередь...",
+                chat_id=status_message.chat.id,
+                message_id=status_message.message_id
+            )
+
+            queued_count = 0
+            skipped_count = 0
+            failed_count = 0
+
+            for entry in entries:
+                if not entry: # Skip None entries sometimes returned by yt-dlp
+                    failed_count += 1
+                    continue
+
+                # Try extracting necessary info for download_track
+                entry_url = entry.get('url')
+                entry_title = entry.get('title', None) # Explicitly check for None/empty later
+                entry_duration = entry.get('duration', 0)
+
+                # Basic filtering similar to search (e.g., duration)
+                if not entry_duration or not (MIN_SONG_DURATION <= entry_duration <= MAX_SONG_DURATION):
+                     print(f"[Playlist Download] Skipping '{entry_title}' due to duration: {entry_duration}s")
+                     skipped_count += 1
+                     continue
+
+                # Artist extraction logic similar to search functions
+                entry_artist = "Unknown Artist" # Default
+                source_key = entry.get('ie_key', '').lower()
+                
+                if source_key == 'soundcloud':
+                     # SC often has 'uploader' as artist, title might be "Artist - Title"
+                     raw_title = entry_title if entry_title else 'Unknown Title'
+                     sc_uploader = entry.get('uploader', None)
+                     if ' - ' in raw_title:
+                         parts = raw_title.split(' - ', 1)
+                         potential_artist = parts[0].strip()
+                         potential_title = parts[1].strip()
+                         # Prefer split result if both parts seem valid
+                         if potential_artist and potential_title:
+                             entry_title = potential_title
+                             entry_artist = potential_artist
+                         else: # Fallback if split is weird
+                             entry_title = raw_title
+                             entry_artist = sc_uploader if sc_uploader else "Unknown Artist"
+                     elif sc_uploader: # If no ' - ' but uploader exists, use that
+                         entry_title = raw_title
+                         entry_artist = sc_uploader
+                     else: # Worst case
+                         entry_title = raw_title
+                         entry_artist = "Unknown Artist"
+                         
+                elif source_key == 'bandcamp':
+                     # BC might have 'artist' (album artist) or 'uploader' (label)
+                     entry_artist = entry.get('artist', entry.get('uploader', 'Unknown Artist'))
+                     raw_title = entry_title if entry_title else 'Unknown Title'
+                     # Try splitting title if artist seems missing
+                     if entry_artist == 'Unknown Artist' and ' - ' in raw_title:
+                          parts = raw_title.split(' - ', 1)
+                          potential_artist = parts[0].strip()
+                          potential_title = parts[1].strip()
+                          if potential_artist and potential_title:
+                               entry_title = potential_title
+                               entry_artist = potential_artist
+                          else:
+                               entry_title = raw_title # Keep original if split fails
+                     else:
+                          entry_title = raw_title # Keep original if artist was found directly
+
+                else: # Assume YouTube or other (use standard extractor)
+                    if entry_title: # Only extract if title exists
+                        entry_title, entry_artist = extract_title_and_artist(entry_title)
+                        if entry_artist == "Unknown Artist": # Fallback to uploader for YT-like
+                            entry_artist = entry.get('uploader', 'Unknown Artist')
+                    else:
+                        entry_title = 'Unknown Title' # Handle case where title is missing
+                        entry_artist = entry.get('uploader', 'Unknown Artist')
+
+                # Final validation before queuing
+                if not entry_url or entry_title == 'Unknown Title':
+                    print(f"[Playlist Download] Warning: Skipping entry in '{playlist_title}' due to missing URL or essential Title: {entry}")
+                    failed_count += 1
+                    continue
+
+                # Construct track_data for the queue
+                track_data = {
+                    "title": entry_title,
+                    "channel": entry_artist, # Use 'channel' key consistently
+                    "url": entry_url,
+                    "source": source_key # Store source if available
+                }
+
+                # Check if already downloading or queued (use the same logic as callback handlers)
+                # Ensure user_id is initialized for download_tasks/queues
+                if user_id not in download_tasks: download_tasks[user_id] = {}
+                if user_id not in download_queues: download_queues[user_id] = []
+
+                if track_data["url"] in download_tasks[user_id]:
+                    print(f"[Playlist Download] Skipping {track_data['url']} - already downloading.")
+                    skipped_count += 1
+                    continue
+                if any(item[0]['url'] == track_data['url'] for item in download_queues[user_id]):
+                    print(f"[Playlist Download] Skipping {track_data['url']} - already in queue.")
+                    skipped_count += 1
+                    continue
+
+                # Add to queue
+                # Pass the original_message context for download_track?
+                # download_track uses callback_message for context/updates.
+                # Passing original_message might be okay, but let's stick to the pattern
+                # where the status_message is passed. However, we have only one status_message
+                # for the whole playlist. 
+                # Let's pass original_message and download_track can use its .answer() method.
+                download_queues[user_id].append((track_data, original_message)) 
+                queued_count += 1
+
+            # Final message after iterating through entries
+            final_message_parts = [f"✅ Плейлист '{playlist_title}':"]
+            if queued_count > 0:
+                final_message_parts.append(f"добавлено {queued_count} треков в очередь.")
+            if skipped_count > 0:
+                final_message_parts.append(f"{skipped_count} пропущено (уже в очереди/скачиваются или не прошли фильтр).")
+            if failed_count > 0:
+                final_message_parts.append(f"{failed_count} не удалось обработать (ошибка данных).")
+            
+            # Use the status message to show the final summary
+            try:
+                await bot.edit_message_text(
+                    " ".join(final_message_parts),
+                    chat_id=status_message.chat.id,
+                    message_id=status_message.message_id
+                )
+            except Exception as edit_final_error:
+                 print(f"Error editing final playlist status: {edit_final_error}")
+                 # Fallback to sending a new message
+                 await original_message.answer(" ".join(final_message_parts))
+                 try: # Try to delete the intermediate status message
+                     await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+                 except Exception: pass # Ignore delete error
+
+            # Start processing the queue if needed
+            if queued_count > 0:
+                # Check if processing can start immediately
+                active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
+                if active_downloads < MAX_PARALLEL_DOWNLOADS:
+                     print(f"[Playlist Download] Triggering queue processing for user {user_id}")
+                     asyncio.create_task(process_download_queue(user_id)) # Don't await this
+                else:
+                     print(f"[Playlist Download] Queue for user {user_id} will be processed as existing downloads complete.")
+            
+            return # IMPORTANT: Exit after handling playlist
+
+        # --- 2. Download (Only runs if NOT a playlist) --- 
+        # Edit status message only if it wasn't a playlist that already finished
+        # (The message would have been edited or deleted by the playlist logic)
+        # Check if status_message still exists conceptually
+        try:
+             # This check isn't perfect but better than editing blindly
+             # If the message was deleted, this might fail, hence the try-except
+             await bot.edit_message_text( 
+                 f"⏳ качаю медиа",
+                 chat_id=status_message.chat.id,
+                 message_id=status_message.message_id
+             )
+        except Exception:
+             # If editing failed (likely message deleted), create a new status message? Or just proceed?
+             # Let's proceed silently, the user got the initial "пытаюсь скачать" message.
+             print("[URL Download] Status message likely deleted by playlist handler, proceeding with single download.")
+             pass 
 
     except yt_dlp.utils.DownloadError as dl_err:
          # Catch specific yt-dlp download errors
@@ -1294,7 +1205,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
     except Exception as e:
         # Generic exception handler remains the same
-        print(f"ERROR during URL download/processing for {url}: {e}\n{traceback.format_exc()}")
+        print(f"ERROR during URL download/processing for {url}: {e}\\n{traceback.format_exc()}")
         error_text_base = f"❌ блин ошибка при скачивании/обработке ссылки {str(e).lower()}"
         if "Unsupported URL" in str(e):
              error_text_base = f"❌ извини ссылка не поддерживается или не содержит медиа {url[:60]}"
@@ -1355,509 +1266,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     
         if not cleaned_a_file:
             print(f"[URL Download] No temporary files found matching base path {base_temp_path} for cleanup.")
-
-async def search_youtube_playlists(query, max_results=20):
-    """Searches YouTube for playlists using yt-dlp."""
-    try:
-        search_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': True,
-            'extract_flat': True,
-            'default_search': 'ytsearch',
-            'max_downloads': max_results * 3,
-        }
-        print(f"[YouTube Playlist Search] Querying: ytsearch{search_opts['max_downloads']}:{query}")
-        
-        results = []
-        with yt_dlp.YoutubeDL(search_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch{search_opts['max_downloads']}:{query}", download=False)
-            if not info or 'entries' not in info:
-                print("[YouTube Playlist Search] No entries found.")
-                return []
-            
-            count = 0
-            for entry in info['entries']:
-                if entry and entry.get('_type') == 'playlist':
-                    if " / " in entry.get('title','') or "Mix - " in entry.get('title',''):
-                         continue
-                    results.append({
-                        'title': entry.get('title', 'unknown youtube playlist'),
-                        'channel': entry.get('channel', 'unknown channel'),
-                        'url': entry.get('url', ''),
-                        'count': entry.get('playlist_count'),
-                        'source': 'youtube'
-                    })
-                    count += 1
-                    if count >= max_results:
-                         break
-        
-        print(f"[YouTube Playlist Search] Found {len(results)} playlists.")
-        return results
-    except Exception as e:
-        print(f"An error occurred during YouTube playlist search: {e}\n{traceback.format_exc()}")
-        return []
-
-async def search_soundcloud_playlists(query, max_results=20):
-    """Searches SoundCloud for playlists/sets using yt-dlp."""
-    try:
-        search_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': True,
-            'extract_flat': True,
-            'default_search': 'scsearch',
-            'max_downloads': max_results * 4,
-        }
-        print(f"[SoundCloud Playlist Search] Querying: scsearch{search_opts['max_downloads']}:{query}")
-
-        results = []
-        with yt_dlp.YoutubeDL(search_opts) as ydl:
-            info = ydl.extract_info(f"scsearch{search_opts['max_downloads']}:{query}", download=False)
-            if info and info.get('_type') == 'playlist' and info.get('entries'):
-                 results.append({
-                     'title': info.get('title', 'unknown soundcloud set'),
-                     'channel': info.get('uploader', 'unknown uploader'),
-                     'url': info.get('webpage_url', info.get('original_url', '')),
-                     'count': info.get('playlist_count'),
-                     'source': 'soundcloud'
-                 })
-                 print("[SoundCloud Playlist Search] Found direct playlist match.")
-                 
-            if info and 'entries' in info:
-                count = len(results)
-                for entry in info['entries']:
-                    entry_url = entry.get('url', '')
-                    if entry and '/sets/' in entry_url and entry.get('ie_key') == 'Soundcloud':
-                         if any(pl['url'] == entry_url for pl in results):
-                             continue
-                             
-                         results.append({
-                            'title': entry.get('title', 'unknown soundcloud set'),
-                            'channel': entry.get('uploader', 'unknown uploader'),
-                            'url': entry_url,
-                            'count': None,
-                            'source': 'soundcloud'
-                         })
-                         count += 1
-                         if count >= max_results:
-                              break
-                              
-        unique_results = []
-        seen_urls = set()
-        for res in results:
-            if res['url'] not in seen_urls:
-                 unique_results.append(res)
-                 seen_urls.add(res['url'])
-                 
-        print(f"[SoundCloud Playlist Search] Found {len(unique_results)} playlists/sets.")
-        return unique_results
-    except Exception as e:
-        print(f"An error occurred during SoundCloud playlist search: {e}\n{traceback.format_exc()}")
-        return []
-
-# --- NEW: Playlist Keyboard ---
-def create_playlists_keyboard(playlists, page=0, search_id=""):
-    total_pages = math.ceil(len(playlists) / TRACKS_PER_PAGE)
-    start_idx = page * TRACKS_PER_PAGE
-    end_idx = min(start_idx + TRACKS_PER_PAGE, len(playlists))
-    
-    buttons = []
-    
-    for i in range(start_idx, end_idx):
-        pl = playlists[i]
-        playlist_data = {
-            "url": pl['url'],
-        }
-        
-        safe_url_bytes = pl['url'].encode('utf-8')
-        callback_data = f"pldl_{base64.urlsafe_b64encode(safe_url_bytes).decode('utf-8')}"
-            
-        count_str = f" ({pl['count']} треков)" if pl.get('count') else ""
-        source_str = " [YT]" if pl.get('source') == 'youtube' else " [SC]" if pl.get('source') == 'soundcloud' else ""
-        channel_str = f" - {pl['channel']}" if pl.get('channel') else ""
-        
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"💿 {pl['title']}{channel_str}{count_str}{source_str}",
-                callback_data=callback_data
-            )
-        ])
-    
-    if total_pages > 1:
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="⬅️",
-                    callback_data=f"plpage_{page-1}_{search_id}"
-                )
-            )
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text=f"{page+1}/{total_pages}",
-                callback_data="info"
-            )
-        )
-        if page < total_pages - 1:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="➡️",
-                    callback_data=f"plpage_{page+1}_{search_id}"
-                )
-            )
-        buttons.append(nav_buttons)
-    
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-# --- Correctly indented playlist command handler ---
-@dp.message(Command("playlist"))
-async def cmd_playlist_search(message: types.Message):
-    if len(message.text.split()) < 2:
-        await message.answer("❌ напиши что-нибудь после /playlist\nнапример /playlist synthwave mix")
-        return
-    
-    query = " ".join(message.text.split()[1:])
-    searching_message = await message.answer("🔍 ищу плейлисты/альбомы...")
-    
-    search_id = str(uuid.uuid4())
-    
-    yt_playlists, sc_playlists = await asyncio.gather(
-        search_youtube_playlists(query),
-        search_soundcloud_playlists(query)
-    )
-
-    combined_results = sc_playlists + yt_playlists
-
-    if not combined_results:
-        await message.answer("❌ не нашел плейлистов/альбомов по твоему запросу")
-        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-        return
-    
-    search_results[search_id] = combined_results
-    keyboard = create_playlists_keyboard(combined_results, 0, search_id)
-    
-    await message.answer(
-        f"💿 нашел вот {len(combined_results)} плейлистов/альбомов по запросу '{query}' ⬇",
-        reply_markup=keyboard
-    )
-    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-
-# --- Callback Handlers for Playlist Buttons ---
-@dp.callback_query(F.data.startswith("pldl_"))
-async def process_playlist_download_callback(callback: types.CallbackQuery):
-    try:
-        encoded_url = callback.data[len("pldl_"):]
-        playlist_url = base64.urlsafe_b64decode(encoded_url).decode('utf-8')
-        user_id = callback.from_user.id
-
-        # Simple check: maybe limit simultaneous playlist downloads per user?
-        # For now, allow one playlist download at a time per user.
-        # Find if any existing task is handling a playlist (needs better tracking maybe)
-        is_already_downloading_playlist = False
-        # This check is basic, needs refinement if playlist downloads become complex tasks
-        # For now, just prevent starting if ANY download task exists for the user
-        if user_id in download_tasks and download_tasks[user_id]:
-             # Let's refine this: check if a playlist task specifically is running
-             # Need a way to distinguish playlist tasks from single track tasks
-             # Placeholder: assume any active task blocks new playlist download
-             await callback.answer("❌ Пожалуйста, дождись окончания текущих загрузок перед скачиванием плейлиста.", show_alert=True)
-             return
-
-        status_message = await callback.message.answer(f"⏳ Начинаю обработку плейлиста... {playlist_url[:60]}")
-        
-        # Create task for playlist download
-        # Store this task differently? Or add type info?
-        task = asyncio.create_task(
-            download_playlist(user_id, playlist_url, callback.message, status_message)
-        )
-        # Store task - How to differentiate? Maybe use URL as key?
-        # Using URL as key might conflict if user tries same playlist twice
-        # Using a temporary UUID as key for the playlist task?
-        playlist_task_id = f"playlist_{uuid.uuid4()}" 
-        download_tasks[user_id][playlist_task_id] = task 
-        
-        await callback.answer("Начинаю скачивание плейлиста...")
-
-    except (base64.binascii.Error, UnicodeDecodeError):
-        await callback.message.answer("❌ Не удалось распознать URL плейлиста.")
-        await callback.answer()
-    except Exception as e:
-        print(f"Error in process_playlist_download_callback: {e}\n{traceback.format_exc()}")
-        await callback.message.answer(f"❌ Ошибка при запуске скачивания плейлиста: {e}")
-        await callback.answer()
-
-@dp.callback_query(F.data.startswith("plpage_"))
-async def process_playlist_page_callback(callback: types.CallbackQuery):
-    try:
-        parts = callback.data.split("_")
-        page = int(parts[1])
-        search_id = parts[2]
-        
-        if search_id not in search_results:
-            await callback.answer("❌ Эти результаты поиска уже старые, поищи заново", show_alert=True)
-            return
-        
-        # Assuming search_results[search_id] contains playlists if prefix is plpage_
-        playlists = search_results[search_id]
-        keyboard = create_playlists_keyboard(playlists, page, search_id)
-        
-        await callback.message.edit_reply_markup(reply_markup=keyboard)
-        await callback.answer()
-    except (IndexError, ValueError):
-        await callback.answer("❌ Не смог понять номер страницы плейлиста", show_alert=True)
-    except Exception as e:
-        print(f"Error in process_playlist_page_callback: {e}")
-        await callback.answer(f"❌ Ошибка при перелистывании плейлистов: {e}", show_alert=True)
-
-# --- Main Playlist Download Function --- 
-async def download_playlist(user_id, playlist_url, original_message, status_message):
-    loop = asyncio.get_running_loop()
-    downloaded_tracks_info = [] # Store paths and metadata for sending later
-    playlist_title = "Unknown Playlist"
-    playlist_hashtag = "#UnknownPlaylist"
-    temp_files_to_clean = [] # Keep track of all files to delete
-
-    try:
-        await bot.edit_message_text(
-            f"⏳ Получаю информацию о плейлисте...",
-            chat_id=status_message.chat.id,
-            message_id=status_message.message_id
-        )
-
-        # 1. Extract playlist info using yt-dlp
-        playlist_ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': True, # Ignore errors for individual tracks within playlist
-            'extract_flat': 'in_playlist', # Get entries without full processing initially
-            'dump_single_json': True, # Get info as JSON
-        }
-        
-        print(f"[Playlist Download] Extracting info for: {playlist_url}")
-        with yt_dlp.YoutubeDL(playlist_ydl_opts) as ydl:
-            # Run in executor as it might still involve network calls
-            info_dict = await loop.run_in_executor(None, lambda: ydl.extract_info(playlist_url, download=False))
-
-        if not info_dict or 'entries' not in info_dict or not info_dict['entries']:
-            raise Exception("Не удалось получить список треков из плейлиста.")
-
-        playlist_title = info_dict.get('title', playlist_title)
-        playlist_hashtag = generate_hashtag(playlist_title)
-        entries = info_dict['entries']
-        total_tracks = len(entries)
-        print(f"[Playlist Download] Found {total_tracks} tracks in '{playlist_title}'.")
-
-        # 2. Download tracks sequentially
-        for i, entry in enumerate(entries):
-            if not entry: # Skip if entry is None
-                 print(f"[Playlist Download] Skipping invalid entry {i+1}/{total_tracks}")
-                 continue
-                 
-            track_num = i + 1
-            track_title = entry.get('title', f'Track {track_num}')
-            track_artist = entry.get('artist', entry.get('uploader', 'Unknown Artist'))
-            track_url = entry.get('url')
-            # Duration might not be available in flat extract, get if possible
-            track_duration = entry.get('duration') 
-
-            if not track_url:
-                print(f"[Playlist Download] Skipping track {track_num}/{total_tracks} ('{track_title}') - No URL found")
-                continue
-                
-            # Filter by duration if available
-            if track_duration and not (MIN_SONG_DURATION <= track_duration <= MAX_SONG_DURATION):
-                 print(f"[Playlist Download] Skipping track {track_num}/{total_tracks} ('{track_title}') - Duration {track_duration}s out of range ({MIN_SONG_DURATION}-{MAX_SONG_DURATION})")
-                 continue
-
-            await bot.edit_message_text(
-                f"⏳ Скачиваю трек {track_num}/{total_tracks}: {track_title} - {track_artist}",
-                chat_id=status_message.chat.id,
-                message_id=status_message.message_id
-            )
-            
-            # Create unique base path for this track
-            safe_track_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in track_title).strip('_.-')[:80]
-            track_temp_base = os.path.join(tempfile.gettempdir(), f"pl_{uuid.uuid4()}_{safe_track_title}")
-            
-            # Download this single track
-            downloaded_path = await _download_single_track_for_playlist(
-                track_url, track_title, track_artist, track_temp_base
-            )
-
-            if downloaded_path:
-                print(f"[Playlist Download] Successfully downloaded track {track_num}: {downloaded_path}")
-                downloaded_tracks_info.append({ 
-                    'path': downloaded_path, 
-                    'title': track_title, 
-                    'artist': track_artist
-                })
-                temp_files_to_clean.append(downloaded_path)
-            else:
-                print(f"[Playlist Download] Failed to download track {track_num}: {track_title}")
-                # Optionally send a message about the failed track?
-                # await original_message.answer(f"❌ Не удалось скачать трек: {track_title}")
-
-        # 3. Send downloaded tracks
-        if not downloaded_tracks_info:
-            raise Exception("Не удалось скачать ни одного трека из плейлиста.")
-
-        await bot.edit_message_text(
-            f"📤 Отправляю {len(downloaded_tracks_info)} треков из '{playlist_title}'...",
-            chat_id=status_message.chat.id,
-            message_id=status_message.message_id
-        )
-
-        for track_info in downloaded_tracks_info:
-            try:
-                await bot.send_audio(
-                    chat_id=original_message.chat.id,
-                    audio=FSInputFile(track_info['path']),
-                    title=track_info['title'],
-                    performer=track_info['artist'],
-                    caption=playlist_hashtag
-                )
-                await asyncio.sleep(0.5) # Small delay between sends to avoid flooding
-            except Exception as send_err:
-                print(f"[Playlist Send] Error sending track {track_info['path']}: {send_err}")
-                # Maybe inform the user about the send error?
-
-        await bot.delete_message(status_message.chat.id, status_message.message_id)
-        await original_message.answer(f"✅ Готово! Скачано и отправлено {len(downloaded_tracks_info)} треков из плейлиста '{playlist_title}'.")
-
-    except Exception as e:
-        print(f"ERROR during playlist download for {playlist_url}: {e}\n{traceback.format_exc()}")
-        error_text = f"❌ Ошибка при скачивании плейлиста '{playlist_title}': {e}"
-        try:
-            await bot.edit_message_text(
-                chat_id=status_message.chat.id,
-                message_id=status_message.message_id,
-                text=error_text[:4000] # Limit error message length
-            )
-        except Exception as edit_error:
-            print(f"Failed to edit message for playlist error: {edit_error}")
-            # Fallback to sending new message
-            try:
-                 await original_message.answer(error_text[:4000])
-                 # Don't delete original status if edit failed
-            except Exception as send_error:
-                 print(f"[Playlist Download] Warning: Failed to send new message for error: {send_error}")
-
-    finally:
-        # 4. Cleanup
-        print(f"[Playlist Cleanup] Cleaning up {len(temp_files_to_clean)} temporary files for playlist '{playlist_title}'")
-        for f_path in temp_files_to_clean:
-            if os.path.exists(f_path):
-                try:
-                    os.remove(f_path)
-                except Exception as remove_err:
-                    print(f"[Playlist Cleanup] Warning: Failed to remove temp file {f_path}: {remove_err}")
-        
-        # Remove playlist task from tracking
-        # Need the playlist_task_id used when creating the task
-        # This requires passing the ID to download_playlist or finding it another way.
-        # For now, let's assume we need to pass the task ID.
-        # We will need to modify the call in process_playlist_download_callback
-        # placeholder cleanup:
-        if user_id in download_tasks and playlist_task_id in download_tasks[user_id]:
-             try:
-                 del download_tasks[user_id][playlist_task_id]
-                 print(f"[Playlist Cleanup] Removed task {playlist_task_id} for user {user_id}.")
-                 # Remove user ID if no tasks left
-                 if not download_tasks[user_id]:
-                     del download_tasks[user_id]
-                     print(f"[Playlist Cleanup] Removed user entry {user_id} as no tasks left.")
-             except KeyError:
-                 print(f"[Playlist Cleanup] Warning: Task {playlist_task_id} already removed for user {user_id}.")
-        # pass # Placeholder for proper task removal - REMOVED
-
-# --- Helper to Download Single Track --- 
-async def _download_single_track_for_playlist(url, title, artist, base_temp_path):
-    """Downloads, converts, validates, and sets metadata for a single track. Returns path or None."""
-    loop = asyncio.get_running_loop()
-    expected_mp3_path = base_temp_path + '.mp3'
-    
-    # Ensure clean state for this track
-    for ext in ['.mp3', '.m4a', '.webm', '.mp4', '.opus', '.ogg', '.aac', '.part']:
-        potential_path = f"{base_temp_path}{ext}"
-        if os.path.exists(potential_path):
-            try: os.remove(potential_path) 
-            except OSError: pass
-            
-    download_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'outtmpl': base_temp_path + '.%(ext)s',
-        'quiet': True,
-        'verbose': False,
-        'no_warnings': True,
-        'prefer_ffmpeg': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': False, # Fail fast for single track download errors within playlist
-        'extract_flat': False,
-        'ffmpeg_location': '/usr/bin/ffmpeg'
-    }
-
-    try:
-        print(f"[_TrackDL] Starting: {title} - {artist} ({url})")
-        # Use blocking download helper
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
-        print(f"[_TrackDL] Finished blocking call: {title}")
-
-        if not os.path.exists(expected_mp3_path):
-            print(f"[_TrackDL] ERROR: MP3 not found at {expected_mp3_path}")
-            # Check for intermediates (less likely with ignoreerrors=False)
-            return None
-            
-        if os.path.getsize(expected_mp3_path) == 0:
-            print(f"[_TrackDL] ERROR: MP3 empty at {expected_mp3_path}")
-            return None
-
-        # Validate MP3 structure
-        try:
-            audio_check = MP3(expected_mp3_path)
-            if not audio_check.info.length > 0:
-                print(f"[_TrackDL] ERROR: MP3 zero length: {expected_mp3_path}")
-                return None
-            print(f"[_TrackDL] MP3 Validated: {expected_mp3_path}")
-        except Exception as validation_error:
-            print(f"[_TrackDL] ERROR: MP3 Validation failed: {expected_mp3_path}, {validation_error}")
-            return None
-
-        # Set metadata
-        if not set_mp3_metadata(expected_mp3_path, title, artist):
-             print(f"[_TrackDL] ERROR: Failed to set metadata: {expected_mp3_path}")
-             return None
-             
-        print(f"[_TrackDL] Success: {title} -> {expected_mp3_path}")
-        return expected_mp3_path
-
-    except yt_dlp.utils.DownloadError as dl_err:
-        print(f"[_TrackDL] ERROR: yt-dlp DownloadError for '{title}': {dl_err}")
-        return None
-    except Exception as e:
-        print(f"[_TrackDL] ERROR: Generic error for '{title}': {e}\n{traceback.format_exc()}")
-        return None
-
-# --- Helper for Hashtag --- 
-def generate_hashtag(text):
-    # Remove non-alphanumeric characters (allow letters and numbers)
-    # Keep original case for readability, telegram handles case-insensitivity
-    cleaned = re.sub(r'[^a-zA-Z0-9_]', '', text)
-    # Remove leading digits if any, as hashtags can't start with numbers
-    cleaned = re.sub(r'^\d+', '', cleaned)
-    # Limit length (optional, Telegram handles long tags but might look bad)
-    cleaned = cleaned[:50]
-    if not cleaned:
-        return "#DownloadedPlaylist" # Fallback
-    return f"#{cleaned}"
 
 async def main():
     await dp.start_polling(bot)
