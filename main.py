@@ -61,7 +61,7 @@ ydl_opts = {
 def extract_title_and_artist(title):
     """Улучшенное извлечение названия трека и исполнителя"""
     # Удаляем общие префиксы
-    prefixes = ['Official Video', 'Official Music Video', 'Official Audio', 'Lyric Video', 'Lyrics']
+    prefixes = ['Official Video', 'Official Music Video', 'Official Audio', 'Lyric Video', 'Lyrics', 'Topic']
     for prefix in prefixes:
         if title.lower().endswith(f" - {prefix.lower()}"):
             title = title[:-len(prefix)-3]
