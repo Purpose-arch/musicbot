@@ -471,10 +471,18 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
              safe_title = f"audio_{uuid.uuid4()}" # Fallback name
 
         temp_dir = tempfile.gettempdir() # Должен быть /tmp в контейнере
-        base_temp_path = os.path.join(temp_dir, safe_title) # e.g., /tmp/Ya_uebyvayu_v_dzhaz
+        
+        # --- Generate Unique Base Path ---
+        if is_playlist_track:
+            base_temp_path = os.path.join(temp_dir, f"pl_{playlist_download_id}_{safe_title}")
+        else:
+            task_uuid = str(uuid.uuid4()) # Unique ID for this single download task
+            base_temp_path = os.path.join(temp_dir, f"single_{task_uuid}_{safe_title}")
+        print(f"[Download Path] Base temp path set to: {base_temp_path}")
+        # ---------------------------------
         
         # Удаляем существующие файлы с разными расширениями перед скачиванием
-        # Важно сделать это ДО вызова ydl.download
+        # (This check might be less critical now with unique names, but kept for safety)
         for ext in ['.mp3', '.m4a', '.webm', '.mp4', '.opus', '.ogg', '.aac', '.part']:
             potential_path = f"{base_temp_path}{ext}"
             if os.path.exists(potential_path):
@@ -1710,54 +1718,18 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                  print(f"[URL Download] Warning: Failed to send new message for error: {send_error}")
 
     finally:
-        # --- Cleanup ---
-        # For single tracks, temp_path should be deleted.
-        # For playlist tracks, temp_path should ONLY be deleted if the download FAILED.
-        # Successful playlist tracks are deleted later by send_completed_playlist.
-        should_delete_temp_file = False
-        # Check temp_path exists and the file itself exists
-        if temp_path and os.path.exists(temp_path):
-            if not is_playlist_track:
-                # Always delete for single tracks (success or failure)
-                should_delete_temp_file = True
-                print(f"[Cleanup] Marking single track temp file for deletion: {temp_path}")
-            else:
-                # For playlists, only delete if this track failed
-                track_failed = False
-                if playlist_entry: # Check playlist_entry exists
-                    for track in playlist_entry['tracks']:
-                        # Check status only if URL matches (should be unique within playlist)
-                        if track['url'] == url:
-                            if track['status'] == 'failed':
-                                track_failed = True
-                            break # Found the track, no need to check further
-
-        # --- Task Management ---
-        # Remove task entry regardless of playlist/single or success/failure, as the task itself is done.
-        if user_id in download_tasks:
-            if download_tasks[user_id].pop(track_data["url"], None):
-                 print(f"Removed task entry for URL: {track_data['url']}")
-            else:
-                 print(f"Task entry for URL {track_data['url']} not found or already removed.")
-            if not download_tasks[user_id]:
-                print(f"No tasks left for user {user_id}, removing user entry.")
-                del download_tasks[user_id]
-            else:
-                 print(f"{len(download_tasks[user_id])} tasks remaining for user {user_id}.")
-
-        # --- Trigger Queue Processing ---
-        # Check queue AGAIN after finishing a task, regardless of type.
-        # This ensures the next item is picked up if slots are free.
-        if user_id in download_queues and download_queues[user_id]:
-            # Check if parallel slots are available before triggering
-            active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
-            if active_downloads < MAX_PARALLEL_DOWNLOADS:
-                 print(f"Processing next item in queue for user {user_id} (active: {active_downloads}).")
-                 # Use create_task to avoid blocking the finally block
-                 asyncio.create_task(process_download_queue(user_id))
-            else:
-                 print(f"Queue for user {user_id} has items, but max parallel downloads ({active_downloads}) reached.")
-        # else: No need for an else print here, common case
+        # Cleanup for SINGLE file downloads only. Playlist files are handled by send_completed_playlist/cancel.
+        if actual_downloaded_path and os.path.exists(actual_downloaded_path):
+            # Check if it was a playlist (unlikely to reach here, but safeguard)
+            # The check `if extracted_info and extracted_info.get('_type') == 'playlist':` should prevent this block from running for playlists.
+            # So, if we are here, it should be a single download. 
+            print(f"[URL Cleanup] Attempting to remove single download file: {actual_downloaded_path}")
+            try:
+                os.remove(actual_downloaded_path)
+                print(f"[URL Cleanup] Successfully removed: {actual_downloaded_path}")
+            except Exception as remove_error:
+                print(f"[URL Cleanup] Warning: Failed to remove single download file {actual_downloaded_path}: {remove_error}")
+        # Removed Task Management and Queue Processing logic from here - it belongs in download_track's finally block.
 
 async def main():
     await dp.start_polling(bot)
