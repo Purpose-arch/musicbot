@@ -180,7 +180,7 @@ async def search_soundcloud(query, max_results=50):
 
                     results.append({
                         'title': title,
-                        'channel': artist, # Use 'channel' key for consistency
+                        'channel': artist.strip(), # Use 'channel' key for consistency
                         'url': entry.get('webpage_url', entry.get('url', '')), # Prefer webpage_url if available
                         'duration': duration_seconds,
                         'source': 'soundcloud' # Add source identifier
@@ -1383,14 +1383,12 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             }
 
             # Update status message
+            status_text = f"""⏳ Обнаружен плейлист '{playlist_title}'.
+Найдено {total_processed} треков для загрузки.
+{limit_message}
+Добавляю в очередь..."""
             await bot.edit_message_text(
-                (f"⏳ Обнаружен плейлист '{playlist_title}'.
-"
-                 f"Найдено {total_processed} треков для загрузки.
-"
-                 f"{limit_message}
-"
-                 f"Добавляю в очередь..."),
+                status_text,
                 chat_id=status_message.chat.id,
                 message_id=status_message.message_id
             )
