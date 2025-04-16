@@ -265,6 +265,76 @@ async def search_bandcamp(query, max_results=50):
         print(f"An error occurred during Bandcamp search: {e}\n{traceback.format_exc()}")
         return []
 
+async def search_spotify(query, max_results=50):
+    """Searches Spotify using spotdl and returns potential matches with download URLs."""
+    if not (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET):
+        print("[Spotify Search] Error: Spotify credentials not configured.")
+        return []
+
+    loop = asyncio.get_running_loop()
+    results = []
+    
+    try:
+        print(f"[Spotify Search] Initializing Spotdl client for query: '{query}'")
+        spotdl_client = Spotdl(
+            client_id=SPOTIFY_CLIENT_ID, 
+            client_secret=SPOTIFY_CLIENT_SECRET, 
+            headless=True
+        )
+
+        # Search using the query string (blocking operation)
+        # We assume spotdl search handles text query and might return more than max_results.
+        # We will rely on asyncio.gather structure and MAX_TRACKS limit later.
+        print(f"[Spotify Search] Querying spotdl search API for: '{query}'")
+        songs_list = await loop.run_in_executor(None, spotdl_client.search, [query])
+        print(f"[Spotify Search] Found {len(songs_list)} potential matches from spotdl.")
+
+        processed_count = 0
+        for song_obj in songs_list:
+            # Limit results processed from this source if needed (using max_results as a guide)
+            if processed_count >= max_results:
+                print(f"[Spotify Search] Reached max_results ({max_results}), stopping processing for this source.")
+                break
+                
+            try:
+                title = song_obj.name
+                artist = song_obj.artists[0] if song_obj.artists else "Unknown Artist"
+                download_url = getattr(song_obj, 'download_url', None)
+                spotify_url = song_obj.url # Get the actual spotify URL for reference/debugging
+                duration = getattr(song_obj, 'duration', 0) # Duration in ms from spotdl? Convert to s.
+                duration_seconds = duration / 1000 if duration else 0
+
+                if not download_url:
+                    print(f"[Spotify Search] Skipping '{title} - {artist}' (URL: {spotify_url}) - No download_url found by spotdl.")
+                    continue
+                
+                # Basic validation
+                if not title or not artist:
+                     print(f"[Spotify Search] Skipping track with missing title/artist. Data: {song_obj}")
+                     continue
+                     
+                # Add to results
+                results.append({
+                    'title': title,
+                    'channel': artist,
+                    'url': download_url, # The URL found by spotdl (e.g., YouTube)
+                    'duration': int(duration_seconds), # Store as integer seconds
+                    'source': 'spotify'
+                })
+                processed_count += 1
+
+            except Exception as parse_err:
+                print(f"[Spotify Search] Error processing individual spotdl song object: {parse_err}. Data: {song_obj}")
+                continue # Skip this song
+                
+        print(f"[Spotify Search] Processed {processed_count} valid tracks with download URLs.")
+        return results
+
+    except Exception as e:
+        print(f"[Spotify Search] Error during spotdl search for query '{query}': {e}")
+        print(traceback.format_exc())
+        return []
+
 def create_tracks_keyboard(tracks, page=0, search_id=""):
     total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
     start_idx = page * TRACKS_PER_PAGE
@@ -962,16 +1032,22 @@ async def cmd_search(message: types.Message):
     
     search_id = str(uuid.uuid4())
     # Search all sources concurrently
-    max_results_per_source = MAX_TRACKS // 3 # Divide budget
-    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+    max_results_per_source = MAX_TRACKS // 4 # Divide budget among 4 sources now
+    spotify_results, youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+        search_spotify(query, max_results_per_source), # Added Spotify search
         search_youtube(query, max_results_per_source),
         search_soundcloud(query, max_results_per_source),
-        search_bandcamp(query, max_results_per_source) # Add bandcamp search
+        search_bandcamp(query, max_results_per_source)
     )
 
-    # Prioritize SoundCloud -> Bandcamp -> YouTube results
+    # Prioritize Spotify -> SoundCloud -> Bandcamp -> YouTube results
     combined_results = []
-    # Add SoundCloud results first
+    # Add Spotify results first
+    for sp_track in spotify_results:
+         if 'source' not in sp_track: # Should have source already, but defensive check
+             sp_track['source'] = 'spotify'
+         combined_results.append(sp_track)
+    # Add SoundCloud results
     for sc_track in soundcloud_results:
         if 'source' not in sc_track:
             sc_track['source'] = 'soundcloud'
@@ -987,10 +1063,11 @@ async def cmd_search(message: types.Message):
             yt_track['source'] = 'youtube'
         combined_results.append(yt_track)
 
-    # Limit total results if needed
+    # Limit total results if needed (redundant if MAX_TRACKS was respected by sources?)
+    # combined_results = combined_results[:MAX_TRACKS]
 
     if not combined_results:
-        await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
+        await message.answer("❌ чет ничего не нашлось ни на одном из источников попробуй другой запрос") # Updated message
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     
@@ -1330,32 +1407,44 @@ async def handle_text(message: types.Message):
             search_id = str(uuid.uuid4())
             # Search all sources concurrently
             try:
-                max_results_per_source = MAX_TRACKS // 3
-                youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                max_results_per_source = MAX_TRACKS // 4 # Divide budget among 4 sources now
+                spotify_results, youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                    search_spotify(query, max_results_per_source), # Added Spotify search
                     search_youtube(query, max_results_per_source),
                     search_soundcloud(query, max_results_per_source),
                     search_bandcamp(query, max_results_per_source)
                 )
 
-                # Prioritize SoundCloud -> Bandcamp -> YouTube results
+                # Prioritize Spotify -> SoundCloud -> Bandcamp -> YouTube results
                 combined_results = []
+                # Add Spotify results first
+                for sp_track in spotify_results:
+                     if 'source' not in sp_track: # Should have source already, but defensive check
+                         sp_track['source'] = 'spotify'
+                     combined_results.append(sp_track)
+                # Add SoundCloud results
                 for sc_track in soundcloud_results:
-                    if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                    if 'source' not in sc_track:
+                        sc_track['source'] = 'soundcloud'
                     combined_results.append(sc_track)
+                # Then add Bandcamp results
                 for bc_track in bandcamp_results:
-                    if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-                    combined_results.append(bc_track)
+                     if 'source' not in bc_track:
+                         bc_track['source'] = 'bandcamp'
+                     combined_results.append(bc_track)
+                # Then add YouTube results
                 for yt_track in youtube_results:
-                    if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                    if 'source' not in yt_track:
+                        yt_track['source'] = 'youtube'
                     combined_results.append(yt_track)
 
+                # Limit total results if needed (redundant if MAX_TRACKS was respected by sources?)
+                # combined_results = combined_results[:MAX_TRACKS]
+
                 if not combined_results:
-                    await bot.edit_message_text(
-                         chat_id=searching_message.chat.id, 
-                         message_id=searching_message.message_id,
-                         text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
-                    )
-                    return # Correctly indented return
+                    await message.answer("❌ чет ничего не нашлось ни на одном из источников попробуй другой запрос") # Updated message
+                    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+                    return
     
                 search_results[search_id] = combined_results
                 keyboard = create_tracks_keyboard(combined_results, 0, search_id)
@@ -1583,29 +1672,45 @@ async def handle_group_search(message: types.Message, query: str):
     search_id = str(uuid.uuid4())
     
     try:
-        max_results_per_source = MAX_TRACKS // 3
-        youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+        max_results_per_source = MAX_TRACKS // 4 # Divide budget among 4 sources now
+        spotify_results, youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+            search_spotify(query, max_results_per_source), # Added Spotify search
             search_youtube(query, max_results_per_source),
             search_soundcloud(query, max_results_per_source),
             search_bandcamp(query, max_results_per_source)
         )
 
+        # Prioritize Spotify -> SoundCloud -> Bandcamp -> YouTube results
         combined_results = []
+        # Add Spotify results first
+        for sp_track in spotify_results:
+             if 'source' not in sp_track:
+                 sp_track['source'] = 'spotify'
+             combined_results.append(sp_track)
+        # Add SoundCloud results
         for sc_track in soundcloud_results:
-            if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+            if 'source' not in sc_track:
+                sc_track['source'] = 'soundcloud'
             combined_results.append(sc_track)
+        # Then add Bandcamp results
         for bc_track in bandcamp_results:
-            if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+            if 'source' not in bc_track:
+                bc_track['source'] = 'bandcamp'
             combined_results.append(bc_track)
+        # Then add YouTube results
         for yt_track in youtube_results:
-            if 'source' not in yt_track: yt_track['source'] = 'youtube'
+            if 'source' not in yt_track:
+                yt_track['source'] = 'youtube'
             combined_results.append(yt_track)
+
+        # Limit total results if needed
+        # combined_results = combined_results[:MAX_TRACKS]
 
         if not combined_results:
             await bot.edit_message_text(
                 chat_id=status_message.chat.id,
                 message_id=status_message.message_id,
-                text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
+                text="❌ ничего не нашел по твоему запросу ни на одном из источников попробуй еще раз" # Updated message
             )
             return
 
@@ -1615,8 +1720,8 @@ async def handle_group_search(message: types.Message, query: str):
             chat_id=status_message.chat.id,
             message_id=status_message.message_id,
             text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
-        reply_markup=keyboard
-    )
+            reply_markup=keyboard
+        )
 
     except Exception as e:
         print(f"Error during group search for query '{query}': {e}")
