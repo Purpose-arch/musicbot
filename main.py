@@ -304,19 +304,37 @@ async def search_spotify(query, max_results=50):
         print(f"[Spotify Search] Querying spotdl search API for: '{query}'")
         songs_list = await loop.run_in_executor(None, spotdl_client.search, [query])
         print(f"[Spotify Search] Found {len(songs_list)} potential matches from spotdl.")
+        # --- ADDED DEBUG LOG: Print raw songs_list ---
+        # print(f"[Spotify Search DEBUG] Raw songs_list: {songs_list}") 
+        # Limit log size if too long
+        songs_list_repr = repr(songs_list)
+        if len(songs_list_repr) > 1500: # Limit log output size
+             print(f"[Spotify Search DEBUG] Raw songs_list (first 1500 chars): {songs_list_repr[:1500]}...")
+        else:
+             print(f"[Spotify Search DEBUG] Raw songs_list: {songs_list_repr}")
+        # -------------------------------------------
 
         processed_count = 0
-        for song_obj in songs_list:
+        for index, song_obj in enumerate(songs_list):
             # Limit results processed from this source if needed (using max_results as a guide)
             if processed_count >= max_results:
                 print(f"[Spotify Search] Reached max_results ({max_results}), stopping processing for this source.")
                 break
                 
             try:
+                # --- ADDED DEBUG LOG: Print song object attributes ---
+                s_name = getattr(song_obj, 'name', 'N/A')
+                s_artists = getattr(song_obj, 'artists', [])
+                s_artist = s_artists[0] if s_artists else 'N/A'
+                s_url = getattr(song_obj, 'url', 'N/A')
+                s_download_url = getattr(song_obj, 'download_url', None)
+                print(f"[Spotify Search DEBUG {index}] Processing: Name='{s_name}', Artist='{s_artist}', URL='{s_url}', DownloadURL='{s_download_url}'")
+                # ----------------------------------------------------
+                
                 title = song_obj.name
                 artist = song_obj.artists[0] if song_obj.artists else "Unknown Artist"
-                download_url = getattr(song_obj, 'download_url', None)
-                spotify_url = song_obj.url # Get the actual spotify URL for reference/debugging
+                download_url = s_download_url # Use the already fetched attribute
+                spotify_url = s_url # Use the already fetched attribute
                 duration = getattr(song_obj, 'duration', 0) # Duration in ms from spotdl? Convert to s.
                 duration_seconds = duration / 1000 if duration else 0
 
