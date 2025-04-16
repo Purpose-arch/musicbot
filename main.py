@@ -1505,13 +1505,28 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                           else: entry_title = raw_title
                      else: entry_title = raw_title
                 else: # YouTube/Other
-                    if entry_title:
-                        entry_title, entry_artist = extract_title_and_artist(entry_title)
-                        if entry_artist == "Unknown Artist": entry_artist = entry.get('uploader', 'Unknown Artist')
-                    else: entry_title = 'Unknown Title'; entry_artist = entry.get('uploader', 'Unknown Artist')
+                    original_raw_title = entry_title # Store original title before attempting extraction
+                    if entry_title: # Only extract if title exists
+                        extracted_title, extracted_artist = extract_title_and_artist(entry_title)
+                        # Use extracted results only if title is not 'Unknown Title'
+                        if extracted_title != 'Unknown Title':
+                             entry_title = extracted_title
+                             entry_artist = extracted_artist
+                             # Fallback to uploader if extracted artist is unknown
+                             if entry_artist == "Unknown Artist": 
+                                 entry_artist = entry.get('uploader', 'Unknown Artist')
+                        else:
+                            # Extraction failed, use original title and uploader as artist
+                            print(f"[Playlist Prep] Extraction failed for '{original_raw_title}', using raw title.")
+                            entry_title = original_raw_title 
+                            entry_artist = entry.get('uploader', 'Unknown Artist') 
+                    else: 
+                        entry_title = 'Unknown Title' # Handle case where original title was missing
+                        entry_artist = entry.get('uploader', 'Unknown Artist')
 
-                if not entry_url or entry_title == 'Unknown Title':
-                    print(f"[Playlist Prep] Warning: Skipping entry in '{playlist_title}' due to missing URL or Title: {entry}")
+                # Final validation before queuing
+                if not entry_url or not entry_title or entry_title == 'Unknown Title': # Check for None/empty title too
+                    print(f"[Playlist Prep] Warning: Skipping entry in '{playlist_title}' due to missing URL or essential Title: {entry}")
                     failed_initial_parse_count += 1
                     continue
 
@@ -1531,7 +1546,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             total_processed = len(processed_tracks_for_playlist)
             if total_processed == 0:
                  await bot.edit_message_text(
-                    f"❌ Не найдено подходящих треков (в рамках ({MIN_SONG_DURATION}-{MAX_SONG_DURATION}с)) в плейлисте '{playlist_title}'.",
+                    f"❌ Не найдено подходящих треков для обработки в плейлисте '{playlist_title}'.", # Removed duration mention
                     chat_id=status_message.chat.id,
                     message_id=status_message.message_id
                  )
