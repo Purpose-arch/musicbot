@@ -1526,6 +1526,14 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
                 # Final validation before queuing
                 if not entry_url or not entry_title or entry_title == 'Unknown Title': # Check for None/empty title too
+                    # --- ADDED DEBUG LOGGING --- 
+                    reason = ""
+                    if not entry_url: reason += "Missing URL. "
+                    if not entry_title: reason += "Missing Title. "
+                    if entry_title == 'Unknown Title': reason += "Title is 'Unknown Title'."
+                    print(f"[Playlist Prep DEBUG] Skipping entry. Reason: {reason.strip()}")
+                    print(f"[Playlist Prep DEBUG] Entry data: {entry}")
+                    # --------------------------- 
                     print(f"[Playlist Prep] Warning: Skipping entry in '{playlist_title}' due to missing URL or essential Title: {entry}")
                     failed_initial_parse_count += 1
                     continue
