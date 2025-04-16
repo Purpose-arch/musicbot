@@ -10,7 +10,10 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile,
+    ReplyKeyboardMarkup, KeyboardButton # Added ReplyKeyboard imports
+)
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 from mutagen.mp3 import MP3
 import yt_dlp
@@ -36,6 +39,28 @@ download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)  # Очереди загрузок для каждого пользователя
 MAX_PARALLEL_DOWNLOADS = 5  # Максимальное количество одновременных загрузок
+
+# --- NEW: Search Mode State ---
+user_search_mode = {} # user_id: 'tracks' or 'playlists'
+MODE_TRACKS = 'tracks'
+MODE_PLAYLISTS = 'playlists'
+BUTTON_TEXT_TO_PLAYLISTS = "🎶 Искать плейлисты"
+BUTTON_TEXT_TO_TRACKS = "🎧 Искать треки"
+
+# --- NEW: Reply Keyboard Function ---
+def get_mode_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    current_mode = user_search_mode.get(user_id, MODE_TRACKS) # Default to tracks
+    if current_mode == MODE_TRACKS:
+        button_text = BUTTON_TEXT_TO_PLAYLISTS
+    else:
+        button_text = BUTTON_TEXT_TO_TRACKS
+        
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=button_text)]],
+        resize_keyboard=True,
+        one_time_keyboard=False # Keep keyboard visible
+    )
+    return keyboard
 
 # Настройки yt-dlp
 ydl_opts = {
@@ -561,6 +586,9 @@ def set_mp3_metadata(file_path, title, artist):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    user_search_mode[user_id] = MODE_TRACKS # Set default mode
+    keyboard = get_mode_keyboard(user_id)
     await message.answer(
         "🐈‍⬛ приветик я\n\n"
         "✅ персональный\n"
@@ -568,28 +596,37 @@ async def cmd_start(message: types.Message):
         "✅ скачивающий\n"
         "✅ юный\n"
         "✅ новобранец\n\n"
-        "🎵 ищу и скачиваю музыку по названию\n"
+        "🎵 ищу и скачиваю музыку по названию (режим по умолчанию)\n"
         "🔗 или просто скинь мне ссылку на видео/аудио и я попробую скачать\n\n"
+        "👇 Используй кнопку ниже для переключения режима поиска (треки/плейлисты).\n\n"
         "👥 также есть возможность добавить бота в группу и использовать команду\n"
         "«музыка (запрос)»\n"
-        "либо отправить ссылку на видео/аудио там"
+        "либо отправить ссылку на видео/аудио там",
+        reply_markup=keyboard # Send keyboard
     )
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
+    user_id = message.from_user.id
+    keyboard = get_mode_keyboard(user_id)
     # Using triple quotes for cleaner multiline string
     help_text = """*как пользоваться ботом* 
 
-1️⃣ **поиск музыки** просто напиши название трека или исполнителя я поищу на soundcloud bandcamp и youtube и покажу список
+1️⃣ **поиск музыки** просто напиши название трека или исполнителя (убедись что выбран режим *Искать треки*) я поищу на soundcloud bandcamp и youtube и покажу список
 
-2️⃣ **скачивание по ссылке** отправь мне прямую ссылку на страницу с видео или аудио (например с youtube soundcloud vk insta tiktok и многих других) я попытаюсь скачать медиа
+▶️ **поиск плейлистов/альбомов** нажми кнопку *Искать плейлисты* затем напиши запрос я поищу плейлисты на youtube и soundcloud
+
+2️⃣ **скачивание по ссылке** отправь мне прямую ссылку на страницу с видео аудио или плейлистом (youtube soundcloud vk insta tiktok и многих других) я попытаюсь скачать медиа (плейлисты пока качаются только через поиск)
+
+👇 **переключение режима** кнопка внизу переключает между поиском треков и плейлистов для обычных текстовых запросов
 
 *команды*
 /start - показать приветственное сообщение
 /help - показать это сообщение
-/search [запрос] - искать музыку по запросу
-/cancel - отменить активные загрузки (из поиска)"""
-    await message.answer(help_text, parse_mode="Markdown")
+/search [запрос] - искать музыку по запросу (всегда ищет треки)
+/playlist [запрос] - искать плейлисты по запросу (всегда ищет плейлисты)
+/cancel - отменить активные загрузки (из поиска/плейлистов)"""
+    await message.answer(help_text, parse_mode="Markdown", reply_markup=keyboard)
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
@@ -788,8 +825,22 @@ async def handle_text(message: types.Message):
     if message.text.startswith('/'):
         return
     
-    text_lower = message.text.lower().strip()
+    text = message.text # Use original case for button check
+    text_lower = text.lower().strip()
     chat_type = message.chat.type
+    user_id = message.from_user.id
+
+    # --- Reply Keyboard Button Handling --- 
+    if text == BUTTON_TEXT_TO_PLAYLISTS:
+        user_search_mode[user_id] = MODE_PLAYLISTS
+        keyboard = get_mode_keyboard(user_id)
+        await message.answer("✅ Режим переключен на поиск плейлистов/альбомов.", reply_markup=keyboard)
+        return
+    elif text == BUTTON_TEXT_TO_TRACKS:
+        user_search_mode[user_id] = MODE_TRACKS
+        keyboard = get_mode_keyboard(user_id)
+        await message.answer("✅ Режим переключен на поиск треков.", reply_markup=keyboard)
+        return
 
     # --- Group Chat Logic --- 
     if chat_type in ('group', 'supergroup'):
@@ -821,58 +872,100 @@ async def handle_text(message: types.Message):
             await handle_url_download(message, url_check) # Pass URL directly
             return
         else:
-            # Treat as search query - Indent this whole block
-            query = message.text
-            searching_message = await message.answer("🔍 ищу музыку...")
-            search_id = str(uuid.uuid4())
+            # Determine search type based on mode
+            current_mode = user_search_mode.get(user_id, MODE_TRACKS)
+            
+            if current_mode == MODE_TRACKS:
+                # --- Perform TRACK search --- 
+                query = text
+                searching_message = await message.answer("🔍 ищу музыку (треки)...", reply_markup=get_mode_keyboard(user_id))
+                search_id = str(uuid.uuid4())
+                try:
+                    max_results_per_source = MAX_TRACKS // 3
+                    youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
+                        search_youtube(query, max_results_per_source),
+                        search_soundcloud(query, max_results_per_source),
+                        search_bandcamp(query, max_results_per_source)
+                    )
 
-            try:
-                max_results_per_source = MAX_TRACKS // 3
-                youtube_results, soundcloud_results, bandcamp_results = await asyncio.gather(
-                    search_youtube(query, max_results_per_source),
-                    search_soundcloud(query, max_results_per_source),
-                    search_bandcamp(query, max_results_per_source)
-                )
+                    # Combine and prioritize track results
+                    combined_results = []
+                    for sc_track in soundcloud_results:
+                        if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
+                        combined_results.append(sc_track)
+                    for bc_track in bandcamp_results:
+                        if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
+                        combined_results.append(bc_track)
+                    for yt_track in youtube_results:
+                        if 'source' not in yt_track: yt_track['source'] = 'youtube'
+                        combined_results.append(yt_track)
 
-                # Prioritize SoundCloud -> Bandcamp -> YouTube results
-                combined_results = []
-                for sc_track in soundcloud_results:
-                    if 'source' not in sc_track: sc_track['source'] = 'soundcloud'
-                    combined_results.append(sc_track)
-                for bc_track in bandcamp_results:
-                    if 'source' not in bc_track: bc_track['source'] = 'bandcamp'
-                    combined_results.append(bc_track)
-                for yt_track in youtube_results:
-                    if 'source' not in yt_track: yt_track['source'] = 'youtube'
-                    combined_results.append(yt_track)
-
-                if not combined_results:
+                    if not combined_results:
+                        await bot.edit_message_text(
+                             chat_id=searching_message.chat.id,
+                             message_id=searching_message.message_id,
+                             text="❌ ничего не нашел по твоему запросу (треки)"
+                        )
+                        return
+        
+                    search_results[search_id] = combined_results
+                    keyboard = create_tracks_keyboard(combined_results, 0, search_id)
                     await bot.edit_message_text(
+                        chat_id=searching_message.chat.id,
+                        message_id=searching_message.message_id,
+                        text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                     print(f"Error during private track search for query '{query}': {e}")
+                     await bot.edit_message_text(
                          chat_id=searching_message.chat.id,
                          message_id=searching_message.message_id,
-                         text="❌ ничего не нашел по твоему запросу ни там ни там попробуй еще раз"
+                         text=f"❌ блин ошибка при поиске треков: {e}"
+                     )
+                # End of track search block
+                
+            elif current_mode == MODE_PLAYLISTS:
+                # --- Perform PLAYLIST search (reuse logic from cmd_playlist_search) ---
+                query = text
+                searching_message = await message.answer("🔍 ищу плейлисты/альбомы...", reply_markup=get_mode_keyboard(user_id))
+                search_id = str(uuid.uuid4())
+                try:
+                    yt_playlists, sc_playlists = await asyncio.gather(
+                        search_youtube_playlists(query),
+                        search_soundcloud_playlists(query)
                     )
-                    return # Correctly indented return
+                    combined_results = sc_playlists + yt_playlists
 
-                search_results[search_id] = combined_results
-                keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-                await bot.edit_message_text(
-                    chat_id=searching_message.chat.id,
-                    message_id=searching_message.message_id,
-                    text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
-                    reply_markup=keyboard
-                )
-            except Exception as e:
-                 print(f"Error during private search for query '{query}': {e}")
-                 await bot.edit_message_text(
-                     chat_id=searching_message.chat.id,
-                     message_id=searching_message.message_id,
-                     text=f"❌ блин ошибка при поиске: {e}"
-                 )
+                    if not combined_results:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id,
+                            message_id=searching_message.message_id,
+                            text="❌ не нашел плейлистов/альбомов по твоему запросу"
+                        )
+                        return
+                    
+                    search_results[search_id] = combined_results
+                    keyboard = create_playlists_keyboard(combined_results, 0, search_id)
+                    await bot.edit_message_text(
+                        chat_id=searching_message.chat.id,
+                        message_id=searching_message.message_id,
+                        text=f"💿 нашел вот {len(combined_results)} плейлистов/альбомов по запросу '{query}' ⬇",
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    print(f"Error during private playlist search for query '{query}': {e}")
+                    await bot.edit_message_text(
+                        chat_id=searching_message.chat.id,
+                        message_id=searching_message.message_id,
+                        text=f"❌ блин ошибка при поиске плейлистов: {e}"
+                    )
+                # End of playlist search block
+            return # End of private chat text processing
 
-    # If chat type is somehow neither private nor group/supergroup, do nothing
+    # Fallback or other chat types (should not happen with current logic)
     return
-    
+
 async def handle_url_download(message: types.Message, url: str):
     """Handles messages identified as URLs (or via 'медиакот') to initiate download."""
     # Use reply for group trigger, answer for direct URL in private
