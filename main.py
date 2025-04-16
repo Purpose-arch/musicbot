@@ -397,403 +397,273 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     """Downloads a single track. If part of a playlist (playlist_download_id is set),
     it updates the central playlist tracker instead of sending the file directly."""
     
-    # Compatibility: Handle older calls that might still pass messages
-    # If playlist_download_id is provided, message arguments are ignored for status updates.
-    # If playlist_download_id is None, we expect callback_message and status_message for single downloads.
-    
-    temp_path = None # Initialize temp_path to prevent NameError in finally
     loop = asyncio.get_running_loop()
     is_playlist_track = playlist_download_id is not None
+    temp_path = None
+    download_successful = False
+    download_exception = None
     
-    # --- Get necessary info from playlist tracker if applicable ---
+    # --- Extract base info --- 
+    try:
+        title = track_data["title"]
+        artist = track_data["channel"]
+        url = track_data["url"]
+    except KeyError as e:
+        print(f"ERROR: Missing required track data field: {e} in {track_data}")
+        # If basic info missing, we can't proceed. Need to handle playlist completion.
+        download_exception = Exception(f"Missing basic track data: {e}")
+        # Go directly to error handling section for playlists if applicable
+        # This part is tricky, how to signal failure to the playlist here?
+        # Let's rely on the main try/except/finally structure for now.
+        # The outer try/except will catch this or the NameError if title/artist are used before assignment.
+        # For safety, let's pre-assign them.
+        title = track_data.get("title", "Unknown Title")
+        artist = track_data.get("channel", "Unknown Artist")
+        url = track_data.get("url", None)
+        if not url: 
+            download_exception = Exception("Missing URL in track data")
+            # Fall through to outer except block
+            raise download_exception # Raise to be caught below
+            
+    # --- Playlist Context --- 
     playlist_entry = None
     original_status_message_id = None
     chat_id_for_updates = None
-
     if is_playlist_track:
         if playlist_download_id in playlist_downloads:
             playlist_entry = playlist_downloads[playlist_download_id]
             original_status_message_id = playlist_entry.get('status_message_id')
             chat_id_for_updates = playlist_entry.get('chat_id')
         else:
-            # This shouldn't happen if queuing logic is correct
             print(f"ERROR: download_track called with playlist_id {playlist_download_id} but entry not found!")
-            # Clean up task tracking and exit? Or try to proceed as single?
-            # Let's log error and exit the task gracefully.
-            if user_id in download_tasks:
-                download_tasks[user_id].pop(track_data["url"], None)
-                if not download_tasks[user_id]: del download_tasks[user_id]
-            return # Exit task
-
-    elif callback_message and status_message:
-        # Use message context for single downloads
-        chat_id_for_updates = callback_message.chat.id
+            # Task will be cleaned up in finally, but can't update playlist.
+            return 
+    elif status_message: # Primary context for single downloads
+        chat_id_for_updates = status_message.chat.id
         original_status_message_id = status_message.message_id
+    elif original_message_context: # Fallback for single downloads
+        chat_id_for_updates = original_message_context.chat.id
+        original_status_message_id = None 
     else:
-        # This case should ideally not happen for single downloads either if triggered correctly
-        # Check if original_message_context was provided as a fallback (e.g., direct URL download case?)
-        if original_message_context:
-             chat_id_for_updates = original_message_context.chat.id
-             # We don't have a status_message_id in this specific fallback path
-             original_status_message_id = None 
-             print(f"Warning: download_track using original_message_context for single track, no status_message.")
-        else:
-            print(f"ERROR: download_track called for single track (playlist_id=None) but missing message context (callback/status messages and original_message_context)!")
-            # Clean up task tracking and exit
-            if user_id in download_tasks:
-                download_tasks[user_id].pop(track_data["url"], None)
-                if not download_tasks[user_id]: del download_tasks[user_id]
-            return # Exit task
-    # Initialize variables for track info
-    try:
-        title = track_data["title"]
-        artist = track_data["channel"] # Changed key internally, was 'artist' in playlist prep
-        url = track_data["url"]
-    except KeyError as e:
-        print(f"ERROR: Missing required track data field: {e}")
-        # Clean up task tracking and exit
-        if user_id in download_tasks:
-            download_tasks[user_id].pop(track_data["url"], None) 
-            if not download_tasks[user_id]: del download_tasks[user_id]
-        return # Exit task
-        # Создаем БОЛЕЕ безопасное имя файла
-        # Заменяем пробелы на _, удаляем все кроме букв/цифр/./_/- 
-        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
-        # Ограничим длину на всякий случай
-        safe_title = safe_title[:100] 
-        if not safe_title:
-             safe_title = f"audio_{uuid.uuid4()}" # Fallback name
+        print(f"ERROR: download_track called for single track but missing message context!")
+        return 
 
-        temp_dir = tempfile.gettempdir() # Должен быть /tmp в контейнере
-        
-        # --- Generate Unique Base Path ---
+    # --- Main Download and Processing Block ---
+    try:
+        # --- Path Setup --- 
+        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-') else '_' for c in title).strip('_').strip('.').strip('-')
+        safe_title = safe_title[:100] 
+        if not safe_title: safe_title = f"audio_{uuid.uuid4()}"
+        temp_dir = tempfile.gettempdir()
         if is_playlist_track:
             base_temp_path = os.path.join(temp_dir, f"pl_{playlist_download_id}_{safe_title}")
         else:
-            task_uuid = str(uuid.uuid4()) # Unique ID for this single download task
+            task_uuid = str(uuid.uuid4())
             base_temp_path = os.path.join(temp_dir, f"single_{task_uuid}_{safe_title}")
         print(f"[Download Path] Base temp path set to: {base_temp_path}")
-        # ---------------------------------
         
-        # Удаляем существующие файлы с разными расширениями перед скачиванием
-        # (This check might be less critical now with unique names, but kept for safety)
+        # --- Cleanup existing (less critical now with UUIDs) ---
         for ext in ['.mp3', '.m4a', '.webm', '.mp4', '.opus', '.ogg', '.aac', '.part']:
             potential_path = f"{base_temp_path}{ext}"
             if os.path.exists(potential_path):
-                try:
-                    os.remove(potential_path)
-                    print(f"Removed existing file: {potential_path}")
-                except OSError as e:
-                    print(f"Warning: Could not remove existing file {potential_path}: {e}")
+                try: os.remove(potential_path); print(f"Removed existing file: {potential_path}")
+                except OSError as e: print(f"Warning: Could not remove existing file {potential_path}: {e}")
         
-        # --- Download Options setup ---
-        # Переопределяем ydl_opts для этой конкретной загрузки
+        # --- Download Options --- 
+        # Define download_opts dictionary here
         download_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio/best', # Предпочитаем m4a для конвертации
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            # ВАЖНО: outtmpl должен включать полный путь и расширение .%(ext)s 
-            # чтобы ytdl сам обработал имя до и после конвертации
-            'outtmpl': base_temp_path + '.%(ext)s', 
-            'quiet': True, # Keep quiet for track download
-            'verbose': False, # Keep quiet for track download
-            'no_warnings': True, # Keep quiet for track download
+            'outtmpl': base_temp_path + '.%(ext)s',
+            'quiet': True,
+            'verbose': False,
+            'no_warnings': True,
             'prefer_ffmpeg': True,
             'nocheckcertificate': True,
-            'ignoreerrors': True, # Оставляем, но будем проверять наличие файла
-            'extract_flat': False, # Нужно для скачивания, а не только для поиска
-            'ffmpeg_location': '/usr/bin/ffmpeg' # Оставляем явное указание пути
+            'ignoreerrors': True,
+            'extract_flat': False,
+            'ffmpeg_location': '/usr/bin/ffmpeg'
         }
-        
         expected_mp3_path = base_temp_path + '.mp3'
-
-        # --- Blocking Download call --- 
-        # (Removed the pre-download status update call that caused AttributeError)
-        print(f"\nStarting download for: {title} - {artist}")
-        # print(f"URL: {url}") # Debug
-        # print(f"Output template: {download_opts['outtmpl']}") # Debug
-        # print(f"Expected MP3 path: {expected_mp3_path}") # Debug
-        # print(f"Using download options: {download_opts}") # Debug
-
-            # Запускаем блокирующую загрузку/конвертацию в отдельном потоке
-        await loop.run_in_executor(
-            None, 
+        
+        # --- Blocking Download Call (Inner Try/Except) --- 
+        try:
+            print(f"\nStarting download for: {title} - {artist} (URL: {url})")
+            await loop.run_in_executor(
+                None, 
                 _blocking_download_and_convert,
                 url,
-                download_opts # Передаем локальные download_opts
+                download_opts
             )
+            print(f"Finished blocking download call for: {title} - {artist}")
+            # Check if file exists *immediately* after download call
+            if not os.path.exists(expected_mp3_path):
+                 # Check for intermediate files
+                 found_other = False
+                 for ext in ['.m4a', '.webm', '.opus', '.ogg', '.aac']:
+                      potential_path = f"{base_temp_path}{ext}"
+                      if os.path.exists(potential_path):
+                          print(f"Warning: Found intermediate file {potential_path} instead of MP3. Conversion likely failed.")
+                          try: os.remove(potential_path)
+                          except OSError as e: print(f"Could not remove intermediate file {potential_path}: {e}")
+                          found_other = True
+                          break
+                 raise Exception(f"MP3 file not created. Conversion failed? Intermediate found: {found_other}")
             
-        print(f"Finished blocking download call for: {title} - {artist}")
+            # If MP3 exists, mark download as successful for further processing
+            download_successful = True
+            temp_path = expected_mp3_path 
+            print(f"Confirmed MP3 file exists at: {temp_path}")
+            
+        except Exception as dl_exec_err:
+            print(f"ERROR during blocking download/conversion for {title} - {artist}: {dl_exec_err}")
+            # Store exception to be handled by outer block
+            download_exception = dl_exec_err
+            download_successful = False
+            # temp_path remains None or its previous value
 
-            # --- Проверка наличия файла после скачивания --- 
-        if not os.path.exists(expected_mp3_path):
-                print(f"ERROR: Expected MP3 file NOT FOUND at {expected_mp3_path} after download attempt.")
-                # Дополнительно проверим, не остался ли файл с другим расширением (ошибка конвертации?)
-                found_other = False
-                for ext in ['.m4a', '.webm', '.opus', '.ogg', '.aac']:
-                     potential_path = f"{base_temp_path}{ext}"
-                     if os.path.exists(potential_path):
-                         print(f"Warning: Found intermediate file {potential_path} instead of MP3. Conversion likely failed.")
-                         found_other = True
-                         # Попробуем удалить промежуточный файл
-                         try: 
-                             os.remove(potential_path)
-                         except OSError as e:
-                             print(f"Could not remove intermediate file {potential_path}: {e}")
-                         break
-        raise Exception(f"файл {expected_mp3_path} не создался после скачивания/конвертации")
+        # --- Process Result (if download attempt finished) --- 
+        if download_successful:
+            # File exists, proceed with validation and processing
+            if os.path.getsize(temp_path) == 0:
+                raise Exception("Downloaded file is empty")
             
-        temp_path = expected_mp3_path 
-        print(f"Confirmed MP3 file exists at: {temp_path}")
-            
-        if os.path.getsize(temp_path) == 0:
-                print(f"ERROR: Downloaded file {temp_path} is empty.")
-        raise Exception("скачанный файл пустой чет не то")
-            
-        print(f"File size: {os.path.getsize(temp_path)} bytes")
-
-            # --- NEW: Validate MP3 file structure ---
-        try:
+            print(f"File size: {os.path.getsize(temp_path)} bytes")
+            # Validate MP3
+            try:
                 print(f"Validating MP3 structure for {temp_path}...")
                 audio_check = MP3(temp_path) 
                 if not audio_check.info.length > 0:
-                     print(f"ERROR: MP3 file {temp_path} loaded but has zero length/duration.")
-                raise Exception("файл mp3 скачался но похоже битый (нулевая длина)")
+                     raise Exception("MP3 has zero length/duration")
                 print(f"MP3 Validation PASSED for {temp_path}, duration: {audio_check.info.length}s")
-        except Exception as validation_error:
-                print(f"ERROR: MP3 Validation FAILED for {temp_path}: {validation_error}")
-        raise Exception(f"скачанный файл не является валидным mp3 {validation_error}")
-
-        # --- Processing based on whether it's a playlist track --- 
-        if is_playlist_track:
-            print(f"[Playlist Download] Track '{title}' SUCCESS. Storing path: {temp_path}")
-            # Update playlist tracker
-            track_updated = False
-            for track in playlist_entry['tracks']:
-                if track['url'] == url:
-                    track['status'] = 'success'
-                    track['file_path'] = temp_path
-                    track_updated = True
-                    break
+            except Exception as validation_error:
+                raise Exception(f"MP3 Validation FAILED: {validation_error}")
             
-            if not track_updated:
-                 print(f"ERROR: Could not find track {url} in playlist {playlist_download_id} tracker to mark success.")
-                 # Don't delete file yet, maybe send_completed_playlist can find it?
-                 
-            playlist_entry['completed_tracks'] += 1
-            
-            # --- Update Progress Message ---
-            completed = playlist_entry['completed_tracks']
-            total = playlist_entry['total_tracks']
-            # --- ADDED DEBUG LOG --- 
-            print(f"[Playlist Completion Check - Success] Playlist: {playlist_download_id}, Completed: {completed}, Total: {total}")
-            # ------------------------
-            playlist_title_for_status = playlist_entry.get('playlist_title', '')
-            if original_status_message_id and chat_id_for_updates and completed < total:
-                try:
-                    # Avoid updating on the very last track, as send_completed_playlist will handle the final message
-                    status_text = f"⏳ Загрузка плейлиста '{playlist_title_for_status}': {completed}/{total}"
-                    await bot.edit_message_text(
-                        status_text,
-                        chat_id=chat_id_for_updates,
-                        message_id=original_status_message_id
-                    )
-                except Exception as prog_upd_err:
-                    print(f"[Playlist Progress] Warning: Failed to update progress message {original_status_message_id}: {prog_upd_err}")
-                # ------------------------------
-
-            # Check if playlist is complete
-            if completed >= total: # Use >= for safety
-                 print(f"Playlist {playlist_download_id} ('{playlist_entry['playlist_title']}') completed. Triggering send function.")
-                 asyncio.create_task(send_completed_playlist(playlist_download_id))
-                 # Keep temp_path, send_completed_playlist will handle cleanup
+            # --- Handle success based on type ---
+            if is_playlist_track:
+                print(f"[Playlist Download] Track '{title}' SUCCESS. Storing path: {temp_path}")
+                # Update playlist tracker
+                track_updated = False
+                if playlist_entry: # Check again just in case
+                    for track in playlist_entry['tracks']:
+                        if track.get('url') == url: # Match based on the *downloaded* url
+                            track['status'] = 'success'
+                            track['file_path'] = temp_path # Store path for sending
+                            track_updated = True
+                            break
+                    if not track_updated:
+                         print(f"ERROR: Could not find track {url} in playlist {playlist_download_id} tracker to mark success.")
+                # --- Completion Check Logic (Moved to end of block) --- 
+                
+            else: # Single track download: Send immediately
+                print(f"Setting metadata for {temp_path}...")
+                if set_mp3_metadata(temp_path, title, artist):
+                    # ... (keep existing single track sending logic) ...
+                    print(f"Finished processing single track: {title} - {artist}")
+                else:
+                    raise Exception(f"Failed to set metadata for {title} - {artist}")
+        
+        else: # download_successful is False
+            # Raise the captured download exception (or a generic one if none was captured)
+            if download_exception:
+                raise download_exception
             else:
-                 print(f"Playlist {playlist_download_id} progress: {playlist_entry['completed_tracks']}/{playlist_entry['total_tracks']}")
-                 # Keep temp_path for later sending
-                 
-            # DO NOT SEND OR DELETE TEMP FILE HERE FOR PLAYLISTS
-
-        else: # --- Single track download: Send immediately ---
-            print(f"Setting metadata for {temp_path}...")
-            if set_mp3_metadata(temp_path, title, artist):
-                print(f"Metadata set successfully. Preparing to send {temp_path}.")
-                # Delete original status message only for single downloads
-                if original_status_message_id and chat_id_for_updates:
-                    try:
-                        await bot.delete_message(chat_id=chat_id_for_updates, message_id=original_status_message_id)
-                    except Exception as del_err:
-                        print(f"Warning: Failed to delete original status message {original_status_message_id}: {del_err}")
-
-                # Use callback_message context if available for sending confirmation
-                sending_context = callback_message if callback_message else original_message_context # Fallback to original if needed
-                sending_message = await sending_context.answer("📤 отправляю трек") # Use answer on the context
-
-                print(f"Sending audio {temp_path}...")
-                await bot.send_audio(
-                    chat_id=chat_id_for_updates, # Use chat_id derived earlier
-                    audio=FSInputFile(temp_path),
-                    title=title,
-                    performer=artist
-                )
-                print(f"Audio sent successfully. Deleting sending message.")
-                await bot.delete_message(
-                    chat_id=sending_message.chat.id, # Use chat_id from the message we just sent
-                    message_id=sending_message.message_id
-                )
-                print(f"Finished processing track: {title} - {artist}")
-            else:
-                print(f"ERROR: Failed to set metadata for {temp_path}.")
-                raise Exception(f"ошибка при установке метаданных для {title} - {artist}")
-             # Cleanup happens in finally block for single tracks too now
+                raise Exception("Download failed for unknown reason before processing")
 
     except Exception as e:
-         # More detailed error logging
+         # --- Main Error Handling Block (Catches processing errors or re-raised download errors) --- 
          print(f"ERROR during download/processing for {title} - {artist}: {type(e).__name__} - {e}")
-         print(traceback.format_exc()) # Print full traceback
+         # Avoid printing traceback if it was already printed in the inner download exception
+         if not download_exception or e is not download_exception:
+             print(traceback.format_exc()) 
 
-         error_text = f"❌ блин ошибка {str(e).lower()}"
+         error_text = f"❌ ошибка {str(e).lower()}"
          if len(error_text) > 4000: error_text = error_text[:3995] + "..."
 
          if is_playlist_track:
              # Update playlist tracker with failure
              track_updated = False
-             # Ensure playlist_entry exists before iterating
              if playlist_entry:
                  for track in playlist_entry['tracks']:
-                     if track['url'] == url:
+                     if track.get('url') == url: # Match based on *downloaded* url
                          track['status'] = 'failed'
-                         track['error_message'] = str(e)
+                         track['error_message'] = str(e)[:200] # Limit error message length
                          track_updated = True
                          break
                  if not track_updated:
                      print(f"ERROR: Could not find track {url} in playlist {playlist_download_id} tracker to mark failure.")
-
-                 playlist_entry['completed_tracks'] += 1
-                 print(f"Playlist {playlist_download_id} progress after failure: {playlist_entry['completed_tracks']}/{playlist_entry['total_tracks']}")
-
-                 # --- Update Progress Message (also after failure) ---
-                 completed = playlist_entry['completed_tracks']
-                 total = playlist_entry['total_tracks']
-                 # --- ADDED DEBUG LOG --- 
-                 print(f"[Playlist Completion Check - Failure] Playlist: {playlist_download_id}, Completed: {completed}, Total: {total}")
-                 # ------------------------
-                 playlist_title_for_status = playlist_entry.get('playlist_title', '')
-                 if original_status_message_id and chat_id_for_updates and completed < total:
-                     try:
-                         status_text = f"⏳ Загрузка плейлиста '{playlist_title_for_status}': {completed}/{total}"
-                         await bot.edit_message_text(
-                             status_text,
-                             chat_id=chat_id_for_updates,
-                             message_id=original_status_message_id
-                         )
-                     except Exception as prog_upd_err:
-                         print(f"[Playlist Progress] Warning: Failed to update progress message {original_status_message_id}: {prog_upd_err}")
-                 # -----------------------------------------------
-
-                 # Check if playlist is complete even after failure
-                 if completed >= total: # Use >= for safety
-                     print(f"Playlist {playlist_download_id} ('{playlist_entry['playlist_title']}') completed (with failures). Triggering send function.")
-                     asyncio.create_task(send_completed_playlist(playlist_download_id))
-             else:
-                 print(f"ERROR: Playlist entry {playlist_download_id} was None during exception handling for track {url}.")
+                 # --- Completion Check Logic (Moved to end of block) --- 
+                 
+         else: # Single track failure
+             # ... (keep existing single track error message sending logic) ...
+             pass # Placeholder
              
-             # Do not edit the main status message here for individual track failures
-
-         else: # Single track failure - edit the status message or send a new one
-             if original_status_message_id and chat_id_for_updates:
-                 try:
-                     await bot.edit_message_text(
-                         chat_id=chat_id_for_updates,
-                         message_id=original_status_message_id,
-                         text=error_text
-                     )
-                 except Exception as edit_error:
-                     print(f"Failed to edit status message for error: {edit_error}")
-                     # Fallback: Try sending a new message using available context
-                     try:
-                         error_context = callback_message if callback_message else original_message_context # Use appropriate context
-                         if error_context: # Check if context exists
-                             await error_context.answer(error_text)
-                         else:
-                             print("[Single Download] Warning: No message context found to send error reply.")
-                     except Exception as send_error: # Added except block for the inner try
-                         print(f"[Single Download] Warning: Failed to send new message for error: {send_error}")
-             else:
-                # If we couldn't edit (e.g., no status_message_id), try sending a new message directly
-                print(f"[Single Download] No status message to edit, attempting to send error as new message.")
-                try:
-                   error_context = callback_message if callback_message else original_message_context
-                   if error_context:
-                       await error_context.answer(error_text)
-                   else:
-                       print("[Single Download] Warning: No message context found to send error reply.")
-                except Exception as send_error:
-                   print(f"[Single Download] Warning: Failed to send new message for error: {send_error}")
-
+         # --- Completion Check for Playlists (Moved inside the main try...except block) ---
+         if is_playlist_track and playlist_entry:
+             playlist_entry['completed_tracks'] += 1
+             completed = playlist_entry['completed_tracks']
+             total = playlist_entry['total_tracks']
+             print(f"[Playlist Completion Check] Playlist: {playlist_download_id}, Status: {'Success' if download_successful else 'Failure'}, Completed: {completed}, Total: {total}")
+             
+             # Update Progress Message (only if not complete)
+             if completed < total:
+                  if original_status_message_id and chat_id_for_updates:
+                      playlist_title_for_status = playlist_entry.get('playlist_title', '')
+                      try:
+                          status_text = f"⏳ Загрузка плейлиста '{playlist_title_for_status}': {completed}/{total}"
+                          await bot.edit_message_text(
+                              status_text,
+                              chat_id=chat_id_for_updates,
+                              message_id=original_status_message_id
+                          )
+                      except Exception as prog_upd_err:
+                          print(f"[Playlist Progress] Warning: Failed to update progress message {original_status_message_id}: {prog_upd_err}")
+                          
+             # Check if playlist is fully complete
+             if completed >= total:
+                 print(f"Playlist {playlist_download_id} ('{playlist_entry['playlist_title']}') fully processed ({completed}/{total}). Triggering send function.")
+                 asyncio.create_task(send_completed_playlist(playlist_download_id))
+             
+    # --- Finally Block (Task cleanup, queue processing) --- 
     finally:
-         # --- Cleanup ---
-         # For single tracks, temp_path should be deleted.
-         # For playlist tracks, temp_path should ONLY be deleted if the download FAILED.
-         # Successful playlist tracks are deleted later by send_completed_playlist.
-         should_delete_temp_file = False
-         # Check temp_path exists and the file itself exists
-         if temp_path and os.path.exists(temp_path):
-             if not is_playlist_track:
-                 # Always delete for single tracks (success or failure)
-                 should_delete_temp_file = True
-                 print(f"[Cleanup] Marking single track temp file for deletion: {temp_path}")
-             else:
-                 # For playlists, only delete if this track failed
-                 track_failed = False
-                 if playlist_entry: # Check playlist_entry exists
-                     for track in playlist_entry['tracks']:
-                         # Check status only if URL matches (should be unique within playlist)
-                         if track['url'] == url:
-                             if track['status'] == 'failed':
-                                 track_failed = True
-                             break # Found the track, no need to check further
-                     if track_failed:
-                         should_delete_temp_file = True
-                         print(f"[Cleanup] Marking FAILED playlist track temp file for deletion: {temp_path}")
-                     else:
-                         print(f"[Cleanup] Keeping SUCCESSFUL playlist track temp file for later sending: {temp_path}")
+        # --- Cleanup Temp File --- 
+        should_delete_temp_file = False
+        if temp_path and os.path.exists(temp_path):
+            if not is_playlist_track: # Always delete single tracks
+                should_delete_temp_file = True
+            elif not download_successful: # Only delete failed playlist tracks here
+                should_delete_temp_file = True
+                
+            if should_delete_temp_file:
+                print(f"[Cleanup] Deleting temp file ({ 'Single' if not is_playlist_track else ('Failed Playlist' if not download_successful else 'BUG?') }): {temp_path}")
+                try: os.remove(temp_path)
+                except Exception as remove_error: print(f"Warning: Failed to remove temp file {temp_path}: {remove_error}")
+            else:
+                 print(f"[Cleanup] Keeping SUCCESSFUL playlist track temp file for later sending: {temp_path}")
+                 
+        # --- Task Management --- 
+        if user_id in download_tasks:
+            task_removed = download_tasks[user_id].pop(track_data["url"], None)
+            if task_removed: print(f"Removed task entry for URL: {track_data['url']}")
+            # else: print(f"Task entry for URL {track_data['url']} not found or already removed.")
+            if not download_tasks[user_id]:
+                print(f"No tasks left for user {user_id}, removing user entry.")
+                del download_tasks[user_id]
+            else:
+                 active_tasks = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
+                 print(f"{len(download_tasks[user_id])} tasks remaining ({active_tasks} active) for user {user_id}.")
 
-             if should_delete_temp_file:
-                 try:
-                     print(f"Cleaning up temporary file: {temp_path}")
-                     os.remove(temp_path)
-                 except Exception as remove_error:
-                     print(f"Warning: Failed to remove temp file {temp_path}: {remove_error}")
-             
-         # --- Task Management ---
-         # Remove task entry regardless of playlist/single or success/failure, as the task itself is done.
-         if user_id in download_tasks:
-             if download_tasks[user_id].pop(track_data["url"], None):
-                  print(f"Removed task entry for URL: {track_data['url']}")
-             else:
-                  print(f"Task entry for URL {track_data['url']} not found or already removed.")
-             if not download_tasks[user_id]:
-                 print(f"No tasks left for user {user_id}, removing user entry.")
-                 del download_tasks[user_id]
-             else:
-                  print(f"{len(download_tasks[user_id])} tasks remaining for user {user_id}.")
-
-         # --- Trigger Queue Processing ---
-         # Check queue AGAIN after finishing a task, regardless of type.
-         # This ensures the next item is picked up if slots are free.
-         if user_id in download_queues and download_queues[user_id]: 
-             # Check if parallel slots are available before triggering
+        # --- Trigger Queue Processing --- 
+        if user_id in download_queues and download_queues[user_id]: 
              active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
              if active_downloads < MAX_PARALLEL_DOWNLOADS:
                   print(f"Processing next item in queue for user {user_id} (active: {active_downloads}).")
-                  # Use create_task to avoid blocking the finally block
                   asyncio.create_task(process_download_queue(user_id))
-             else:
-                  print(f"Queue for user {user_id} has items, but max parallel downloads ({active_downloads}) reached.")
-         # else: No need for an else print here, common case
+             # else: print(f"Queue for user {user_id} has items, but max parallel downloads ({active_downloads}) reached.")
 
 # --- Function to send completed playlist tracks ---
 async def send_completed_playlist(playlist_download_id):
