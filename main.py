@@ -303,10 +303,14 @@ def create_tracks_keyboard(tracks, page=0, search_id=""):
             source_indicator = " [YT]"
         elif track.get('source') == 'soundcloud':
             source_indicator = " [SC]"
+        elif track.get('source') == 'bandcamp': # Added bandcamp indicator
+             source_indicator = " [BC]"
+        elif track.get('source') == 'spotify': # Added spotify indicator
+             source_indicator = " [SP]"
         
         buttons.append([
             InlineKeyboardButton(
-                text=f"🎧 {track['title']} - {track['channel']}{duration_str}",
+                text=f"🎧 {track['title']} - {track['channel']}{duration_str}{source_indicator}", # Appended indicator
                 callback_data=callback_data
             )
         ])
