@@ -8,6 +8,7 @@ import traceback
 import re
 from collections import defaultdict
 from dotenv import load_dotenv
+import aiogram # <--- Add this import
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -878,7 +879,7 @@ async def handle_text(message: types.Message):
             if current_mode == MODE_TRACKS:
                 # --- Perform TRACK search --- 
                 query = text
-                searching_message = await message.answer("🔍 ищу музыку (треки)...", reply_markup=get_mode_keyboard(user_id))
+                searching_message = await message.answer("🔍 ищу музыку...", reply_markup=get_mode_keyboard(user_id))
                 search_id = str(uuid.uuid4())
                 try:
                     max_results_per_source = MAX_TRACKS // 3
@@ -901,6 +902,7 @@ async def handle_text(message: types.Message):
                         combined_results.append(yt_track)
 
                     if not combined_results:
+                        # Keep editing for "not found"
                         await bot.edit_message_text(
                              chat_id=searching_message.chat.id,
                              message_id=searching_message.message_id,
@@ -908,23 +910,43 @@ async def handle_text(message: types.Message):
                         )
                         return
         
+                    # On success: Delete searching message and send new one
                     search_results[search_id] = combined_results
                     keyboard = create_tracks_keyboard(combined_results, 0, search_id)
-                    await bot.edit_message_text(
-                        chat_id=searching_message.chat.id,
-                        message_id=searching_message.message_id,
-                        text=f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
+                    try:
+                        await bot.delete_message(searching_message.chat.id, searching_message.message_id)
+                    except Exception as del_err:
+                         print(f"Warning: Could not delete searching message: {del_err}")
+                         
+                    await message.answer(
+                        f"🎵 нашел для тебя {len(combined_results)} треков по запросу «{query}» ⬇",
                         reply_markup=keyboard
                     )
                 except Exception as e:
                      print(f"Error during private track search for query '{query}': {e}")
-                     await bot.edit_message_text(
-                         chat_id=searching_message.chat.id,
-                         message_id=searching_message.message_id,
-                         text=f"❌ блин ошибка при поиске треков: {e}"
-                     )
-                # End of track search block
-                
+                     error_text = f"❌ блин ошибка при поиске треков: {e}"
+                     # Try editing first, fallback to delete+send
+                     try:
+                         await bot.edit_message_text(
+                             chat_id=searching_message.chat.id,
+                             message_id=searching_message.message_id,
+                             text=error_text
+                         )
+                     except aiogram.exceptions.TelegramBadRequest:
+                         print("Failed to edit message for track search error, sending new one.")
+                         try:
+                            await bot.delete_message(searching_message.chat.id, searching_message.message_id)
+                         except Exception as del_err:
+                             print(f"Warning: Could not delete searching message before sending error: {del_err}")
+                         await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
+                     except Exception as other_edit_err:
+                         print(f"Unexpected error editing message: {other_edit_err}")
+                         # Optionally try sending new message here too as fallback
+                         try:
+                             await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
+                         except Exception as final_send_err:
+                              print(f"Failed even to send final error message: {final_send_err}")
+
             elif current_mode == MODE_PLAYLISTS:
                 # --- Perform PLAYLIST search (reuse logic from cmd_playlist_search) ---
                 query = text
@@ -938,6 +960,7 @@ async def handle_text(message: types.Message):
                     combined_results = sc_playlists + yt_playlists
 
                     if not combined_results:
+                        # Keep editing for "not found"
                         await bot.edit_message_text(
                             chat_id=searching_message.chat.id,
                             message_id=searching_message.message_id,
@@ -945,22 +968,43 @@ async def handle_text(message: types.Message):
                         )
                         return
                     
+                    # On success: Delete searching message and send new one
                     search_results[search_id] = combined_results
                     keyboard = create_playlists_keyboard(combined_results, 0, search_id)
-                    await bot.edit_message_text(
-                        chat_id=searching_message.chat.id,
-                        message_id=searching_message.message_id,
-                        text=f"💿 нашел вот {len(combined_results)} плейлистов/альбомов по запросу '{query}' ⬇",
+                    try:
+                         await bot.delete_message(searching_message.chat.id, searching_message.message_id)
+                    except Exception as del_err:
+                         print(f"Warning: Could not delete searching message: {del_err}")
+                         
+                    await message.answer(
+                        f"💿 нашел вот {len(combined_results)} плейлистов/альбомов по запросу '{query}' ⬇",
                         reply_markup=keyboard
                     )
                 except Exception as e:
                     print(f"Error during private playlist search for query '{query}': {e}")
-                    await bot.edit_message_text(
-                        chat_id=searching_message.chat.id,
-                        message_id=searching_message.message_id,
-                        text=f"❌ блин ошибка при поиске плейлистов: {e}"
-                    )
-                # End of playlist search block
+                    error_text = f"❌ блин ошибка при поиске плейлистов: {e}"
+                    # Try editing first, fallback to delete+send
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=searching_message.chat.id,
+                            message_id=searching_message.message_id,
+                            text=error_text
+                        )
+                    except aiogram.exceptions.TelegramBadRequest:
+                        print("Failed to edit message for playlist search error, sending new one.")
+                        try:
+                            await bot.delete_message(searching_message.chat.id, searching_message.message_id)
+                        except Exception as del_err:
+                             print(f"Warning: Could not delete searching message before sending error: {del_err}")
+                        await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
+                    except Exception as other_edit_err:
+                         print(f"Unexpected error editing message: {other_edit_err}")
+                         # Optionally try sending new message here too as fallback
+                         try:
+                             await message.answer(error_text, reply_markup=get_mode_keyboard(user_id))
+                         except Exception as final_send_err:
+                              print(f"Failed even to send final error message: {final_send_err}")
+
             return # End of private chat text processing
 
     # Fallback or other chat types (should not happen with current logic)
