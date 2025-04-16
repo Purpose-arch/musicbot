@@ -302,7 +302,20 @@ async def search_spotify(query, max_results=50):
         # We assume spotdl search handles text query and might return more than max_results.
         # We will rely on asyncio.gather structure and MAX_TRACKS limit later.
         print(f"[Spotify Search] Querying spotdl search API for: '{query}'")
-        songs_list = await loop.run_in_executor(None, spotdl_client.search, [query])
+        
+        # --- ADDED: Isolate spotdl search call with try/except and logging ---
+        songs_list = [] # Default to empty list
+        try:
+             print(f"[Spotify Search DEBUG] Entering run_in_executor for spotdl_client.search...")
+             songs_list = await loop.run_in_executor(None, spotdl_client.search, [query])
+             print(f"[Spotify Search DEBUG] Exited run_in_executor for spotdl_client.search.")
+        except Exception as spotdl_search_err:
+             print(f"[Spotify Search CRITICAL] Error DURING spotdl_client.search execution: {spotdl_search_err}")
+             print(traceback.format_exc()) # Print full traceback for this specific error
+             # Return empty list immediately if the search itself failed
+             return []
+        # ---------------------------------------------------------------------
+            
         print(f"[Spotify Search] Found {len(songs_list)} potential matches from spotdl.")
         # --- ADDED DEBUG LOG: Print raw songs_list ---
         # print(f"[Spotify Search DEBUG] Raw songs_list: {songs_list}") 
