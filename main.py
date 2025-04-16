@@ -307,8 +307,17 @@ async def search_spotify(query, max_results=50):
         songs_list = [] # Default to empty list
         try:
              print(f"[Spotify Search DEBUG] Entering run_in_executor for spotdl_client.search...")
-             songs_list = await loop.run_in_executor(None, spotdl_client.search, [query])
+             # --- ADDED: Timeout for spotdl search ---
+             songs_list = await asyncio.wait_for(
+                 loop.run_in_executor(None, spotdl_client.search, [query]), 
+                 timeout=20.0 # Set timeout to 20 seconds
+             )
+             # ----------------------------------------
              print(f"[Spotify Search DEBUG] Exited run_in_executor for spotdl_client.search.")
+        except asyncio.TimeoutError:
+             print(f"[Spotify Search WARNING] spotdl_client.search timed out after 20 seconds for query: '{query}'")
+             # Return empty list on timeout
+             return []
         except Exception as spotdl_search_err:
              print(f"[Spotify Search CRITICAL] Error DURING spotdl_client.search execution: {spotdl_search_err}")
              print(traceback.format_exc()) # Print full traceback for this specific error
