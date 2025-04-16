@@ -588,6 +588,9 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             # --- Update Progress Message ---
             completed = playlist_entry['completed_tracks']
             total = playlist_entry['total_tracks']
+            # --- ADDED DEBUG LOG --- 
+            print(f"[Playlist Completion Check - Success] Playlist: {playlist_download_id}, Completed: {completed}, Total: {total}")
+            # ------------------------
             playlist_title_for_status = playlist_entry.get('playlist_title', '')
             if original_status_message_id and chat_id_for_updates and completed < total:
                 try:
@@ -674,6 +677,9 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                  # --- Update Progress Message (also after failure) ---
                  completed = playlist_entry['completed_tracks']
                  total = playlist_entry['total_tracks']
+                 # --- ADDED DEBUG LOG --- 
+                 print(f"[Playlist Completion Check - Failure] Playlist: {playlist_download_id}, Completed: {completed}, Total: {total}")
+                 # ------------------------
                  playlist_title_for_status = playlist_entry.get('playlist_title', '')
                  if original_status_message_id and chat_id_for_updates and completed < total:
                      try:
@@ -793,6 +799,9 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
 async def send_completed_playlist(playlist_download_id):
     """Sends all successfully downloaded tracks for a completed playlist in order,
     then cleans up."""
+    # --- ADDED DEBUG LOG ---
+    print(f"[Send Playlist START] Function called for Playlist ID: {playlist_download_id}")
+    # ------------------------
     playlist_entry = playlist_downloads.pop(playlist_download_id, None)
     if not playlist_entry:
         print(f"[Send Playlist] ERROR: Playlist entry {playlist_download_id} not found. Cannot send.")
