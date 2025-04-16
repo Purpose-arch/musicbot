@@ -536,11 +536,17 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             # Validate MP3
             try:
                 print(f"Validating MP3 structure for {temp_path}...")
+                # --- ADDED LOGGING --- 
+                print(f"[MP3 Validation] Calling MP3('{temp_path}')...")
                 audio_check = MP3(temp_path) 
+                print(f"[MP3 Validation] MP3('{temp_path}') call finished.")
+                # ---------------------
                 if not audio_check.info.length > 0:
                      raise Exception("MP3 has zero length/duration")
                 print(f"MP3 Validation PASSED for {temp_path}, duration: {audio_check.info.length}s")
             except Exception as validation_error:
+                # Raise exception but add a log message first
+                print(f"[MP3 Validation] Exception during validation: {validation_error}")
                 raise Exception(f"MP3 Validation FAILED: {validation_error}")
             
             # --- Handle success based on type ---
