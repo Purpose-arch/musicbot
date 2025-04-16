@@ -396,6 +396,11 @@ def _blocking_download_and_convert(url, download_opts):
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
     """Downloads a single track. If part of a playlist (playlist_download_id is set),
     it updates the central playlist tracker instead of sending the file directly."""
+    # --- ADDED: Log function entry --- 
+    track_url_for_log = track_data.get('url', '[URL MISSING]')
+    track_title_for_log = track_data.get('title', '[TITLE MISSING]')
+    print(f"[download_track ENTRY] User: {user_id}, Playlist: {playlist_download_id}, Title: '{track_title_for_log}', URL: {track_url_for_log}")
+    # --------------------------------
     
     loop = asyncio.get_running_loop()
     is_playlist_track = playlist_download_id is not None
@@ -653,23 +658,32 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                  
         # --- Task Management --- 
         if user_id in download_tasks:
-            task_removed = download_tasks[user_id].pop(track_data["url"], None)
-            if task_removed: print(f"Removed task entry for URL: {track_data['url']}")
-            # else: print(f"Task entry for URL {track_data['url']} not found or already removed.")
+            # Log counts BEFORE removing
+            current_task_count = len(download_tasks[user_id])
+            active_tasks_before = sum(1 for task in download_tasks[user_id].values() if not task.done())
+            print(f"[Finally Task Mgmt - Before Remove] User: {user_id}, Total Tasks: {current_task_count}, Active: {active_tasks_before}, Removing URL: {track_data.get('url', '[URL MISSING]')}")
+            
+            task_removed = download_tasks[user_id].pop(track_data.get("url"), None)
+            if task_removed: print(f"Removed task entry for URL: {track_data.get('url')}")
+            
+            # Log counts AFTER removing
             if not download_tasks[user_id]:
                 print(f"No tasks left for user {user_id}, removing user entry.")
                 del download_tasks[user_id]
+                active_tasks_after = 0 # No tasks left
             else:
-                 active_tasks = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
-                 print(f"{len(download_tasks[user_id])} tasks remaining ({active_tasks} active) for user {user_id}.")
+                 current_task_count_after = len(download_tasks[user_id])
+                 active_tasks_after = sum(1 for task in download_tasks[user_id].values() if not task.done())
+                 print(f"[Finally Task Mgmt - After Remove] User: {user_id}, Total Tasks: {current_task_count_after}, Active: {active_tasks_after}")
 
-        # --- Trigger Queue Processing --- 
+        # --- Trigger Queue Processing (use active_tasks_after) --- 
         if user_id in download_queues and download_queues[user_id]: 
-             active_downloads = sum(1 for task in download_tasks.get(user_id, {}).values() if not task.done())
-             if active_downloads < MAX_PARALLEL_DOWNLOADS:
-                  print(f"Processing next item in queue for user {user_id} (active: {active_downloads}).")
+             # Check based on count AFTER removing the current task
+             if active_tasks_after < MAX_PARALLEL_DOWNLOADS:
+                  print(f"Processing next item in queue for user {user_id} (active after removal: {active_tasks_after}).")
                   asyncio.create_task(process_download_queue(user_id))
-             # else: print(f"Queue for user {user_id} has items, but max parallel downloads ({active_downloads}) reached.")
+             else:
+                  print(f"Queue check for user {user_id}: Max parallel downloads ({active_tasks_after}) reached or exceeded.")
 
 # --- Function to send completed playlist tracks ---
 async def send_completed_playlist(playlist_download_id):
