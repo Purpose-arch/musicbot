@@ -397,27 +397,19 @@ async def process_download_queue(user_id):
         download_tasks[user_id][track_data["url"]] = task
 
 def _blocking_download_and_convert(url, download_opts):
-    """Helper function to run blocking yt-dlp download and return info dict."""
-    print(f"[_blocking_dl] Starting yt-dlp download for: {url}")
+    """Helper function to run blocking yt-dlp download.""" # Removed "return info dict"
+    print(f"[_blocking_dl] Starting yt-dlp download command for: {url}")
+    info_dict = None # Initialize
     try:
         with yt_dlp.YoutubeDL(download_opts) as ydl:
-            # Use extract_info with download=True to get info dict with filepath
-            info_dict = ydl.extract_info(url, download=True)
-            # --- ADDED IMMEDIATE LOGGING ---
-            print(f"[_blocking_dl] extract_info completed. Raw info_dict type: {type(info_dict)}")
-            # Avoid printing the whole dict if it's huge, just check keys
-            if isinstance(info_dict, dict):
-                 print(f"[_blocking_dl] Raw info_dict keys: {list(info_dict.keys())}")
-            else:
-                 print(f"[_blocking_dl] Raw info_dict content: {info_dict}") # Print if not a dict
-            # -------------------------------
-            print(f"[_blocking_dl] yt-dlp download finished for: {url}. Info keys: {list(info_dict.keys()) if info_dict else 'None'}")
-            return info_dict
+            # Use download method directly, don't rely on return value for path
+            ydl.download([url])
+            print(f"[_blocking_dl] yt-dlp download command finished for: {url}.")
+            # No return value needed
     except Exception as e:
-        print(f"[_blocking_dl] ERROR during yt-dlp download for {url}: {type(e).__name__} - {e}")
+        print(f"[_blocking_dl] ERROR during yt-dlp download command for {url}: {type(e).__name__} - {e}")
         print(traceback.format_exc()) # Log full traceback from helper
-        # Re-raise the exception so the caller knows it failed
-        raise
+        raise # Re-raise
 
 # Adjust download_track signature and logic
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
@@ -1652,35 +1644,166 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         print(f"[URL Download DEBUG] Calling run_in_executor for _blocking_download_and_convert with URL: {url}")
         download_result_info = None # Initialize before try
         try:
-            download_result_info = await loop.run_in_executor(
+            # No return value expected from the modified helper
+            await loop.run_in_executor(
                 None, 
-                _blocking_download_and_convert, # Now returns info dict
+                _blocking_download_and_convert,
                 url,
-                download_specific_opts # Pass strict options
+                download_specific_opts
             )
             print(f"[URL Download DEBUG] run_in_executor finished for {url}.")
         except Exception as executor_err: # Catch errors from the executor/helper
             print(f"[URL Download DEBUG] run_in_executor failed for {url}. Error: {type(executor_err).__name__} - {executor_err}")
-            # Error will be re-raised or handled by the outer try/except block in download_media_from_url
             raise # Re-raise the error to be caught by the main handler
         
-        # -- DEBUG: Log the returned info dict --
+        # --- 3. Find the actual downloaded file --- 
+        # Since _blocking_download_and_convert no longer returns info, 
+        # we MUST rely on finding the file by extension.
+        actual_downloaded_path = None # Reset before searching
+        print("[URL Download] Searching for downloaded file by extension.")
+        possible_extensions = ['.mp4', '.mkv', '.webm', '.mov', '.avi', '.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        for ext in possible_extensions:
+            potential_path = base_temp_path + ext
+            if os.path.exists(potential_path) and os.path.getsize(potential_path) > 0:
+                actual_downloaded_path = potential_path
+                print(f"[URL Download] Found downloaded file via search: {actual_downloaded_path}")
+                break
+        
+        # If still no path found after search, raise error
+        if not actual_downloaded_path:
+             part_file = base_temp_path + ".mp4.part" # Common for merged files
+             if os.path.exists(part_file):
+                 print(f"Warning: Found .part file {part_file}, download might be incomplete or merge failed.")
+             try:
+                 print(f"[URL Download Debug] Listing contents of temp dir ({temp_dir}) before raising error:")
+                 dir_contents = os.listdir(temp_dir)
+                 print(f"[URL Download Debug] Contents: {dir_contents}")
+             except Exception as list_err:
+                 print(f"[URL Download Debug] Failed to list temp dir contents: {list_err}")
+             raise Exception(f"не удалось найти скачанный файл для {url} с ожидаемыми расширениями после команды скачивания")
+
+        # File path found, proceed
+        temp_path = actual_downloaded_path 
+        file_extension = os.path.splitext(actual_downloaded_path)[1].lower()
+        print(f"[URL Download] File extension: {file_extension}")
+
+        # --- Check File Size BEFORE Sending --- 
+        # ... (file size check logic remains the same) ...
+        file_size_bytes = os.path.getsize(actual_downloaded_path)
+        telegram_limit_bytes = 50 * 1024 * 1024 
+        if file_size_bytes > telegram_limit_bytes:
+             file_size_mb = file_size_bytes / (1024 * 1024)
+             print(f"[URL Download] ERROR: File too large ({file_size_mb:.2f} MB) for Telegram limit (50 MB).")
+             raise Exception(f"скачанный файл слишком большой ({file_size_mb:.1f} мб) телеграм разрешает ботам загружать файлы до 50 мб")
+        else:
+             print(f"[URL Download] File size ({file_size_bytes / (1024 * 1024):.2f} MB) is within Telegram limit.")
+             
+        # --- 4. Determine Type and Send --- 
+        is_audio = file_extension in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']
+        is_video = file_extension in ['.mp4', '.mkv', '.webm', '.mov', '.avi']
+        is_image = file_extension in ['.jpg', '.jpeg', '.png', '.gif', '.webp'] # Add image check
+
+        # --- Use extracted_info (from step 1) for metadata --- 
+        title = "Downloaded Media"
+        artist = None
+        duration = 0
+        width = 0
+        height = 0
+        if extracted_info: # Check if info was successfully extracted earlier
+             title = extracted_info.get('title', 'Downloaded Media')
+             # Try different keys for artist info
+             artist = extracted_info.get('artist', extracted_info.get('uploader', extracted_info.get('channel')))
+             duration = extracted_info.get('duration', 0)
+             width = extracted_info.get('width', 0)
+             height = extracted_info.get('height', 0)
+             print(f"[URL Download Metadata] Using info from initial extraction: Title='{title}', Artist='{artist}', Duration={duration}")
+        else:
+             print("[URL Download Metadata] Warning: Initial info extraction failed or skipped, using default metadata.")
+        # -----------------------------------------------------
+        
+        # Sanitize title slightly
+        safe_title = "".join(c if c.isalnum() or c in ('.', '_', '-', ' ') else '_' for c in title).strip()
+        safe_title = safe_title[:150] if safe_title else 'media'
+
+        # Delete the 'downloading...' status message
+        try:
+            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+        except Exception as del_err:
+             print(f"[URL Download] Warning: Failed to delete status message {status_message.message_id}: {del_err}")
+
+        # Send the 'sending...' message
+        file_type_str = 'аудио' if is_audio else 'фото' if is_image else 'видео' if is_video else 'файл'
+        sending_message = await original_message.answer(f"📤 отправляю {file_type_str}")
+        
+        # --- Send the file based on type --- 
+        try:
+            if is_audio:
+                # ... (send_audio logic, using derived metadata) ...
+                print(f"[URL Download] Sending as Audio: {actual_downloaded_path}")
+                performer = artist if artist else None
+                if file_extension == '.mp3':
+                     set_mp3_metadata(actual_downloaded_path, safe_title, performer if performer else "Unknown Artist")
+                await bot.send_audio(
+                    chat_id=original_message.chat.id,
+                    audio=FSInputFile(actual_downloaded_path),
+                    title=safe_title,
+                    performer=performer,
+                    duration=int(duration) if duration else None,
+                )
+            elif is_image:
+                 # ... (send_photo logic) ...
+                 print(f"[URL Download] Sending as Photo: {actual_downloaded_path}")
+                 await bot.send_photo(
+                     chat_id=original_message.chat.id,
+                     photo=FSInputFile(actual_downloaded_path)
+                 )
+            elif is_video:
+                # ... (send_video logic, using derived metadata) ...
+                print(f"[URL Download] Sending as Video: {actual_downloaded_path}")
+                await bot.send_video(
+                    chat_id=original_message.chat.id,
+                    video=FSInputFile(actual_downloaded_path),
+                    duration=int(duration) if duration else None,
+                    width=width if width else None,
+                    height=height if height else None,
+                )
+            else:
+                # ... (send_document logic) ...
+                print(f"[URL Download] Sending as Document (unknown type): {actual_downloaded_path}")
+                await bot.send_document(
+                    chat_id=original_message.chat.id,
+                    document=FSInputFile(actual_downloaded_path)
+                )
+        except Exception as send_err:
+             print(f"[URL Download] ERROR during file send: {send_err}")
+             # Try to delete the 'sending...' message and inform user
+             try: await bot.delete_message(chat_id=sending_message.chat.id, message_id=sending_message.message_id) 
+             except: pass
+             await original_message.answer(f"❌ блин ошибка при отправке файла {file_type_str}")
+             # No need to re-raise here, error is handled, cleanup will occur in finally
+             return # Exit after handling send error
+
+        # --- Cleanup sending message --- 
+        print(f"[URL Download] Media sent successfully. Deleting sending message.")
+        try:
+            await bot.delete_message(chat_id=sending_message.chat.id, message_id=sending_message.message_id)
+        except Exception as final_del_err:
+            print(f"[URL Download] Warning: Failed to delete final sending message: {final_del_err}")
+        print(f"[URL Download] Finished processing URL: {url}")
 
     except yt_dlp.utils.DownloadError as dl_err:
          # Catch specific yt-dlp download errors
          print(f"ERROR yt-dlp DownloadError for {url}: {dl_err}")
          error_text_base = f"❌ ошибка загрузки yt-dlp возможно ссылка битая или сайт изменился"
-         # Attempt to extract a more specific error message if available
-         # yt-dlp often includes the reason in the error message string
          error_msg_lower = str(dl_err).lower()
          if 'forbidden' in error_msg_lower or 'unavailable' in error_msg_lower:
              error_text_base = f"❌ видео недоступно или доступ запрещен"
          elif 'private' in error_msg_lower:
              error_text_base = f"❌ это приватное видео нужен логин"
-         elif 'ip address is blocked' in error_msg_lower: # Check for IP block specifically
+         elif 'ip address is blocked' in error_msg_lower:
              error_text_base = f"❌ сервис заблокировал доступ с ip адреса бота попробуй позже или другую ссылку"
              
-         error_text = error_text_base.replace(',', '').replace('.', '') # Apply style
+         error_text = error_text_base.replace(',', '').replace('.', '')
          try:
              await bot.edit_message_text(
                  chat_id=status_message.chat.id,
@@ -1690,29 +1813,27 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
              )
          except Exception as edit_error:
              print(f"Failed to edit message for DownloadError: {edit_error}")
-             # Fallback to sending new message
              try:
                   await original_message.answer(error_text, disable_web_page_preview=True)
-                  await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+                  # Try deleting the original status message if possible
+                  try: await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+                  except: pass # Ignore delete error
              except Exception as send_error:
                   print(f"[URL Download] Warning: Failed to send new message for DownloadError: {send_error}")
 
     except Exception as e:
-        # Generic exception handler remains the same
-        print(f"ERROR during URL download/processing for {url}: {e}\\n{traceback.format_exc()}")
+        # Generic exception handler
+        print(f"ERROR during URL download/processing for {url}: {e}\n{traceback.format_exc()}")
         error_text_base = f"❌ блин ошибка при скачивании/обработке ссылки {str(e).lower()}"
         if "Unsupported URL" in str(e):
              error_text_base = f"❌ извини ссылка не поддерживается или не содержит медиа {url[:60]}"
-        elif "Request Entity Too Large" in str(e): # Handle this specific error nicely
-             error_text_base = f"❌ скачанный файл слишком большой чтобы отправить его через телеграм (лимит 50 мб)"
-        elif "File too large" in str(e): # Handle our custom large file exception
-             error_text_base = f"❌ {str(e).lower()}" # Already formatted
-        elif "whoops" in str(e).lower() or "unable to download video data" in str(e).lower():
+        elif "Request Entity Too Large" in str(e) or "File too large" in str(e):
+             error_text_base = f"❌ скачанный файл слишком большой (лимит 50 мб)"
+        elif "whoops" in str(e).lower() or "unable to download video data" in str(e).lower() or "не удалось найти скачанный файл" in str(e).lower():
              error_text_base = f"❌ не получилось скачать данные по ссылке возможно она битая или требует логина"
              
-        error_text = error_text_base.replace(',', '').replace('.', '') # Apply final cleanup
-        if len(error_text) > 4000: 
-            error_text = error_text[:3995] + "..." # Adjusted length for ellipsis
+        error_text = error_text_base.replace(',', '').replace('.', '')
+        if len(error_text) > 4000: error_text = error_text[:3995] + "..."
         try:
             await bot.edit_message_text(
                 chat_id=status_message.chat.id,
@@ -1721,28 +1842,23 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 disable_web_page_preview=True
             )
         except Exception as edit_error:
-            print(f"Failed to edit message for error: {edit_error}")
-            # Try sending a new message if editing fails
+            print(f"Failed to edit message for generic error: {edit_error}")
             try:
                  await original_message.answer(error_text, disable_web_page_preview=True)
-                 # Try deleting the original status message if possible
-                 await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+                 try: await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+                 except: pass
             except Exception as send_error:
-                 print(f"[URL Download] Warning: Failed to send new message for error: {send_error}")
+                 print(f"[URL Download] Warning: Failed to send new message for generic error: {send_error}")
 
     finally:
-        # Cleanup for SINGLE file downloads only. Playlist files are handled by send_completed_playlist/cancel.
+        # Cleanup for SINGLE file downloads only.
         if actual_downloaded_path and os.path.exists(actual_downloaded_path):
-            # Check if it was a playlist (unlikely to reach here, but safeguard)
-            # The check `if extracted_info and extracted_info.get('_type') == 'playlist':` should prevent this block from running for playlists.
-            # So, if we are here, it should be a single download. 
             print(f"[URL Cleanup] Attempting to remove single download file: {actual_downloaded_path}")
             try:
                 os.remove(actual_downloaded_path)
                 print(f"[URL Cleanup] Successfully removed: {actual_downloaded_path}")
             except Exception as remove_error:
                 print(f"[URL Cleanup] Warning: Failed to remove single download file {actual_downloaded_path}: {remove_error}")
-        # Removed Task Management and Queue Processing logic from here - it belongs in download_track's finally block.
 
 async def main():
     await dp.start_polling(bot)
