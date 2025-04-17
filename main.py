@@ -563,7 +563,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                 # Update Progress Message (if not the last track)
                 if original_status_message_id and chat_id_for_updates and completed < total:
                     try:
-                        status_text = f"⏳ Загрузка плейлиста '{playlist_title_for_status}': {completed}/{total}"
+                        status_text = f"⏳ загрузка плейлиста {playlist_title_for_status}: {completed}/{total}"
                         await bot.edit_message_text(
                             status_text,
                             chat_id=chat_id_for_updates,
@@ -768,9 +768,9 @@ async def send_completed_playlist(playlist_download_id):
     
     # --- Update Status Message or Send New One ---
     final_status_message = None
-    final_status_text = f"✅ Плейлист '{playlist_title}' скачан. Отправляю {len(successful_tracks)} треков..."
+    final_status_text = f"✅ плейлист '{playlist_title}' скачан, отправляю {len(successful_tracks)} треков..."
     if len(failed_tracks) > 0:
-        final_status_text += f" (Не удалось скачать {len(failed_tracks)})"
+        final_status_text += f" (не удалось скачать {len(failed_tracks)})"
     
     try:
         if original_status_message_id:
