@@ -403,6 +403,14 @@ def _blocking_download_and_convert(url, download_opts):
         with yt_dlp.YoutubeDL(download_opts) as ydl:
             # Use extract_info with download=True to get info dict with filepath
             info_dict = ydl.extract_info(url, download=True)
+            # --- ADDED IMMEDIATE LOGGING ---
+            print(f"[_blocking_dl] extract_info completed. Raw info_dict type: {type(info_dict)}")
+            # Avoid printing the whole dict if it's huge, just check keys
+            if isinstance(info_dict, dict):
+                 print(f"[_blocking_dl] Raw info_dict keys: {list(info_dict.keys())}")
+            else:
+                 print(f"[_blocking_dl] Raw info_dict content: {info_dict}") # Print if not a dict
+            # -------------------------------
             print(f"[_blocking_dl] yt-dlp download finished for: {url}. Info keys: {list(info_dict.keys()) if info_dict else 'None'}")
             return info_dict
     except Exception as e:
