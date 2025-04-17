@@ -398,10 +398,18 @@ async def process_download_queue(user_id):
 
 def _blocking_download_and_convert(url, download_opts):
     """Helper function to run blocking yt-dlp download and return info dict."""
-    with yt_dlp.YoutubeDL(download_opts) as ydl:
-        # Use extract_info with download=True to get info dict with filepath
-        info_dict = ydl.extract_info(url, download=True)
-        return info_dict
+    print(f"[_blocking_dl] Starting yt-dlp download for: {url}")
+    try:
+        with yt_dlp.YoutubeDL(download_opts) as ydl:
+            # Use extract_info with download=True to get info dict with filepath
+            info_dict = ydl.extract_info(url, download=True)
+            print(f"[_blocking_dl] yt-dlp download finished for: {url}. Info keys: {list(info_dict.keys()) if info_dict else 'None'}")
+            return info_dict
+    except Exception as e:
+        print(f"[_blocking_dl] ERROR during yt-dlp download for {url}: {type(e).__name__} - {e}")
+        print(traceback.format_exc()) # Log full traceback from helper
+        # Re-raise the exception so the caller knows it failed
+        raise
 
 # Adjust download_track signature and logic
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
@@ -1406,6 +1414,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     try:
         # --- 1. Get Info (Optional but good for metadata/title) --- 
         extracted_info = None
+        print(f"[URL Download DEBUG] Attempting to extract info for URL: {url}") # Log URL before extraction
         try:
             # Use slightly different opts just for info extraction to avoid downloading accidentally
             info_opts = {
@@ -1417,14 +1426,22 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             }
             with yt_dlp.YoutubeDL(info_opts) as ydl:
                 extracted_info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
-                if not extracted_info:
-                    print(f"[URL Download] Could not extract info for {url}")
+                # Log the result of info extraction
+                if extracted_info:
+                     print(f"[URL Download DEBUG] Info extracted successfully. Keys: {list(extracted_info.keys())}")
+                else:
+                     print(f"[URL Download DEBUG] Info extraction returned None or empty.")
+                     # Fallback - Try downloading without info? Risky, might fail later.
+                     # For now, let extraction failure be handled by the outer except block or proceed cautiously.
         except Exception as info_err:
-            print(f"[URL Download] Error extracting info for {url}: {info_err}")
-            # Continue anyway, try downloading
+            print(f"[URL Download DEBUG] Error during info extraction: {info_err}")
+            print(traceback.format_exc()) # Log traceback for info error
+            # Continue trying to download anyway? Let's allow it for now, maybe direct download works.
 
         # --- Check if it's a playlist BEFORE attempting single download ---
+        print("[URL Download DEBUG] Proceeding to check if URL is a playlist.") # Log before check
         if extracted_info and extracted_info.get('_type') == 'playlist':
+            print("[URL Download DEBUG] URL identified as playlist.") # Log playlist path
             playlist_download_id = str(uuid.uuid4())
             playlist_title = extracted_info.get('title', 'Неизвестный плейлист')
             entries = extracted_info.get('entries', [])
@@ -1599,21 +1616,47 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                  print(f"[Playlist Prep] Queue for user {user_id} will be processed as existing downloads complete.")
 
             return # IMPORTANT: Exit after handling playlist queuing
+        else:
+             print("[URL Download DEBUG] URL identified as single media (or info extraction failed). Proceeding with single download logic.") # Log single path
+             # --- IF NOT A PLAYLIST --- 
+             # --- 2. Download (Single Media) ---
+             # (The rest of the original single-file download logic follows)
+             # ... (ensure status message edit happens only here for single files) ...
+             try:
+                  await bot.edit_message_text(
+                      f"⏳ качаю медиа",
+                      chat_id=status_message.chat.id,
+                      message_id=status_message.message_id
+                  )
+             except Exception as e:
+                  print(f"[URL Download] Warning: Failed to edit status message for single download (maybe deleted?): {e}")
+                  # Proceed silently, user got the initial "пытаюсь скачать" message.
+                  pass
 
-        # --- IF NOT A PLAYLIST ---
-        # --- 2. Download (Single Media) ---
-        # (The rest of the original single-file download logic follows)
-        # ... (ensure status message edit happens only here for single files) ...
+        print(f"\n[URL Download] Starting single download process for: {url}") # Changed log message
+        # print(f"[URL Download] Using download options: {media_ydl_opts}") # Debug
+
+        # Create a stricter options copy for the actual download attempt
+        download_specific_opts = media_ydl_opts.copy()
+        download_specific_opts['ignoreerrors'] = False # Make download attempt strict
+
+        # Use the reusable blocking download function
+        print(f"[URL Download DEBUG] Calling run_in_executor for _blocking_download_and_convert with URL: {url}")
+        download_result_info = None # Initialize before try
         try:
-             await bot.edit_message_text(
-                 f"⏳ качаю медиа",
-                 chat_id=status_message.chat.id,
-                 message_id=status_message.message_id
-             )
-        except Exception as e:
-             print(f"[URL Download] Warning: Failed to edit status message for single download (maybe deleted?): {e}")
-             # Proceed silently, user got the initial "пытаюсь скачать" message.
-             pass
+            download_result_info = await loop.run_in_executor(
+                None, 
+                _blocking_download_and_convert, # Now returns info dict
+                url,
+                download_specific_opts # Pass strict options
+            )
+            print(f"[URL Download DEBUG] run_in_executor finished for {url}.")
+        except Exception as executor_err: # Catch errors from the executor/helper
+            print(f"[URL Download DEBUG] run_in_executor failed for {url}. Error: {type(executor_err).__name__} - {executor_err}")
+            # Error will be re-raised or handled by the outer try/except block in download_media_from_url
+            raise # Re-raise the error to be caught by the main handler
+        
+        # -- DEBUG: Log the returned info dict --
 
     except yt_dlp.utils.DownloadError as dl_err:
          # Catch specific yt-dlp download errors
