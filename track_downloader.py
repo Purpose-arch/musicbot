@@ -13,8 +13,6 @@ from bot_instance import bot
 from config import MAX_PARALLEL_DOWNLOADS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
-# We'll import process_download_queue here to trigger next downloads
-from download_queue import process_download_queue
 
 
 def _blocking_download_and_convert(url, download_opts):
@@ -197,6 +195,8 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         if download_queues.get(user_id):
             active = sum(1 for t in download_tasks.get(user_id, {}).values() if not t.done())
             if active < MAX_PARALLEL_DOWNLOADS:
+                # local import to avoid circular dependency
+                from download_queue import process_download_queue
                 asyncio.create_task(process_download_queue(user_id))
 
 async def send_completed_playlist(playlist_download_id):
