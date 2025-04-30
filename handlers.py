@@ -16,7 +16,7 @@ from search import search_youtube, search_soundcloud, search_bandcamp
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track
 from media_downloader import download_media_from_url
-from queue import process_download_queue
+from download_queue import process_download_queue
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
