@@ -7,6 +7,7 @@ from shazamio import Shazam
 from PyLyrics import PyLyrics
 import lyricwikia
 from musicxmatch_api import MusixMatchAPI
+import re
 
 # Добавляем импорты для новых библиотек
 import lyricsgenius
@@ -84,6 +85,8 @@ async def search_genius(artist: str, track: str) -> Optional[str]:
         if search_result:
             # Получаем текст песни
             lyrics = search_result.lyrics
+            # Убираем заголовок вида 'x Contributor (текущий трек) Lyrics' до первого пустого ряда
+            lyrics = re.sub(r"^.*?\n\n", "", lyrics, count=1)
             # Genius обычно добавляет свою метку в конец текста
             if lyrics.endswith("Embed"):
                 lyrics = lyrics.rsplit("\n", 2)[0].strip()

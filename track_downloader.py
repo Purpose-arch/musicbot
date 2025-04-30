@@ -190,13 +190,18 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                 if ctx:
                     # Notify user about sending track
                     snd = await ctx.answer("📤 отправляю трек")
-                    # Send audio and capture the message
-                    audio_msg = await bot.send_audio(chat_id_for_updates, FSInputFile(temp_path), title=title, performer=artist)
-                    # Delete sending status message
+                    # Delete the temporary status message
                     await bot.delete_message(snd.chat.id, snd.message_id)
-                    # Send lyrics if found
-                    if lyrics:
-                        await bot.send_message(chat_id_for_updates, f"<blockquote expandable>{lyrics}</blockquote>", reply_to_message_id=audio_msg.message_id, parse_mode="HTML")
+                    # Send audio with lyrics as an expandable blockquote in the caption if available
+                    caption = f"<blockquote expandable>{lyrics}</blockquote>" if lyrics else None
+                    audio_msg = await bot.send_audio(
+                        chat_id_for_updates,
+                        FSInputFile(temp_path),
+                        title=title,
+                        performer=artist,
+                        caption=caption,
+                        parse_mode="HTML" if lyrics else None
+                    )
 
     except Exception as e:
         print(f"ERROR in download_track: {e}")
