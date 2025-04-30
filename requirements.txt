@@ -12,6 +12,6 @@ shazamio>=0.7.6
 PyLyrics>=1.1.0
 lyricwikia>=0.1.11
 musicxmatch-api>=0.1.0
-lyricsgenius>=4.3.0
+lyricsgenius>=3.6.2
 chartlyrics>=1.1.0
 yandex-music>=0.28.0
