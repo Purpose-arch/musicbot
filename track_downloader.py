@@ -13,6 +13,7 @@ from bot_instance import bot
 from config import MAX_PARALLEL_DOWNLOADS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
+from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
 
 
 def _blocking_download_and_convert(url, download_opts):
@@ -159,14 +160,43 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         else:
             # Single track:
             if set_mp3_metadata(temp_path, title, artist):
+                # Attempt Shazam recognition to refine title and artist
+                try:
+                    result = await shazam.recognize(temp_path)
+                    track_info = result.get("track", {})
+                    rec_title = track_info.get("title") or track_info.get("heading")
+                    rec_artist = track_info.get("subtitle")
+                    if rec_title and rec_artist:
+                        title, artist = rec_title, rec_artist
+                except Exception as e:
+                    print(f"Shazam recognition error: {e}")
+
+                # Fetch lyrics in priority order: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
+                lyrics = None
+                for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
+                    try:
+                        lyrics = await fetch(artist, title)
+                    except Exception:
+                        lyrics = None
+                    if lyrics:
+                        break
+
+                # Delete original status message if present
                 if original_status_message_id:
                     try: await bot.delete_message(chat_id_for_updates, original_status_message_id)
                     except: pass
+
                 ctx = callback_message or original_message_context
                 if ctx:
+                    # Notify user about sending track
                     snd = await ctx.answer("📤 отправляю трек")
-                    await bot.send_audio(chat_id_for_updates, FSInputFile(temp_path), title=title, performer=artist)
+                    # Send audio and capture the message
+                    audio_msg = await bot.send_audio(chat_id_for_updates, FSInputFile(temp_path), title=title, performer=artist)
+                    # Delete sending status message
                     await bot.delete_message(snd.chat.id, snd.message_id)
+                    # Send lyrics if found
+                    if lyrics:
+                        await bot.send_message(chat_id_for_updates, f"<blockquote expandable>{lyrics}</blockquote>", reply_to_message_id=audio_msg.message_id, parse_mode="HTML")
 
     except Exception as e:
         print(f"ERROR in download_track: {e}")
