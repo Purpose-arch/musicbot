@@ -14,7 +14,7 @@ from config import MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from state import download_queues, download_tasks, playlist_downloads
 from utils import extract_title_and_artist, set_mp3_metadata
 from track_downloader import _blocking_download_and_convert
-from queue import process_download_queue
+from download_queue import process_download_queue
 
 
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
