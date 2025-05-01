@@ -162,9 +162,9 @@ async def process_music(message, client, chat_id: int, message_id: int):
 
             # Параллельно ищем текст песни во всех источниках в порядке приоритета
             lyrics_tasks = [
-                search_genius(artist, title),
                 search_yandex_music(artist, title),
                 search_musicxmatch(artist, title),
+                search_genius(artist, title),
                 search_pylyrics(artist, title),
                 search_chartlyrics(artist, title),
                 search_lyricwikia(artist, title),
