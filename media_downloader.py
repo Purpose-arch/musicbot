@@ -29,7 +29,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
     # media download options
     media_opts = {
-        'format': 'best/bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]',
+        'format': 'bestvideo+bestaudio/best/bestaudio',
         'outtmpl': base_temp_path + '.%(ext)s',
         'quiet': False,
         'verbose': True,
