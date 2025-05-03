@@ -26,7 +26,7 @@ async def cmd_start(message: types.Message):
     # Notify admin about start action
     await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ /start")
     await message.answer(
-        "��‍⬛ приветик я\n\n"
+        "🐈‍⬛ приветик я\n\n"
         "✅ персональный\n"
         "✅ иксперементальный\n"
         "✅ скачивающий\n"
