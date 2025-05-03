@@ -266,4 +266,9 @@ async def send_completed_playlist(playlist_download_id):
         p = t.get('file_path')
         if p and os.path.exists(p):
             try: os.remove(p)
-            except: pass 
+            except: pass
+    # delete the playlist status message after sending all tracks
+    if entry.get('status_message_id'):
+        try:
+            await bot.delete_message(chat_id, entry['status_message_id'])
+        except: pass 

@@ -81,8 +81,10 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     continue
                 # simple extraction
                 title_extracted, artist_extracted = extract_title_and_artist(title)
-                if title_extracted:
-                    title, artist = title_extracted, artist_extracted
+                # override only if a valid artist was extracted
+                if artist_extracted and artist_extracted != "Unknown Artist":
+                    title = title_extracted
+                    artist = artist_extracted
                 processed.append({'original_index': idx, 'url': entry_url, 'title': title, 'artist': artist, 'status':'pending','file_path':None,'source':e.get('ie_key','')})
 
             total = len(processed)
