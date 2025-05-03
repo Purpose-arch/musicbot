@@ -4,6 +4,7 @@ import asyncio
 import tempfile
 import traceback
 import uuid
+import shutil
 
 import yt_dlp
 from aiogram.types import FSInputFile
@@ -70,6 +71,8 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     title = track_data.get('title', 'Unknown Title')
     artist = track_data.get('channel', 'Unknown Artist')
     url = track_data.get('url')
+    source = track_data.get('source', '')
+    vk_track_object = track_data.get('vk_track_object')
 
     if not url:
         print(f"ERROR: Missing URL in track_data for {title}")
@@ -102,21 +105,57 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                 except Exception as e:
                     print(f"Warning: Could not remove {p}: {e}")
 
-        # Download options
-        download_opts = {
-            'format':'bestaudio[ext=m4a]/bestaudio/best',
-            'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
-            'outtmpl':base_temp_path + '.%(ext)s',
-            'quiet':True,'verbose':False,'no_warnings':True,
-            'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
-            'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
-        }
         expected_mp3 = base_temp_path + '.mp3'
-
-        # Blocking download
-        print(f"Starting download for: {title} - {artist}")
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
-        print(f"Finished blocking download for: {title} - {artist}")
+        
+        # Используем прямое скачивание для VK или yt-dlp для других источников
+        if source == 'vk' and vk_track_object:
+            print(f"Starting direct VK download for: {title} - {artist}")
+            
+            # Создаем временный каталог для скачивания VK-треков
+            temp_vk_dir = os.path.join(temp_dir, f"vk_temp_{task_uuid}")
+            os.makedirs(temp_vk_dir, exist_ok=True)
+            
+            # Скачиваем трек через vkpymusic
+            try:
+                download_path = await loop.run_in_executor(
+                    None, 
+                    lambda: vk_track_object.download(temp_vk_dir)
+                )
+                
+                # Копируем файл в ожидаемый путь
+                if download_path and os.path.exists(download_path):
+                    shutil.copy2(download_path, expected_mp3)
+                    # Удаляем исходный файл и временную директорию
+                    os.remove(download_path)
+                    shutil.rmtree(temp_vk_dir, ignore_errors=True)
+                else:
+                    raise Exception("VK download failed: file not created")
+            except Exception as e:
+                print(f"Error during direct VK download: {e}")
+                # Попробуем скачать через URL как резервный вариант
+                print(f"Falling back to URL download for VK track")
+                download_opts = {
+                    'format':'bestaudio[ext=m4a]/bestaudio/best',
+                    'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
+                    'outtmpl':base_temp_path + '.%(ext)s',
+                    'quiet':True,'verbose':False,'no_warnings':True,
+                    'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
+                    'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
+                }
+                await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
+        else:
+            # Стандартное скачивание через yt-dlp для других источников
+            download_opts = {
+                'format':'bestaudio[ext=m4a]/bestaudio/best',
+                'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
+                'outtmpl':base_temp_path + '.%(ext)s',
+                'quiet':True,'verbose':False,'no_warnings':True,
+                'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
+                'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
+            }
+            print(f"Starting download for: {title} - {artist}")
+            await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
+            print(f"Finished blocking download for: {title} - {artist}")
 
         # Check file exists
         if not os.path.exists(expected_mp3):

@@ -12,7 +12,7 @@ from aiogram.filters import Command
 from bot_instance import dp, bot
 from config import TRACKS_PER_PAGE, MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from state import search_results, download_tasks, download_queues, playlist_downloads
-from search import search_youtube, search_soundcloud
+from search import search_youtube, search_soundcloud, search_vk
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track
 from media_downloader import download_media_from_url
@@ -30,7 +30,7 @@ async def cmd_start(message: types.Message):
         "🎵 ищу музыку по названию\n"
         "🔗 скачиваю треки и плейлисты по ссылке (youtube soundcloud), а также видео (тикток)\n\n"
         "👥 также можно добавить меня в группу и использовать команду\n"
-        "«музыка (запрос)»\n"
+        "«музыка/найти/трек/песня (запрос)»\n"
         "либо отправить ссылку там"
     )
 
@@ -60,10 +60,11 @@ async def cmd_search(message: types.Message):
     query = " ".join(message.text.split()[1:])
     searching_message = await message.answer("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
-    max_results = MAX_TRACKS // 3
-    yt, sc = await asyncio.gather(
+    max_results = MAX_TRACKS // 3  # По трети от максимума для каждого из трех источников
+    yt, sc, vk = await asyncio.gather(
         search_youtube(query, max_results),
         search_soundcloud(query, max_results),
+        search_vk(query, max_results),
     )
     combined = []
     for t in sc:
@@ -71,6 +72,9 @@ async def cmd_search(message: types.Message):
         combined.append(t)
     for t in yt:
         if 'source' not in t: t['source'] = 'youtube'
+        combined.append(t)
+    for t in vk:
+        if 'source' not in t: t['source'] = 'vk'
         combined.append(t)
     if not combined:
         await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
@@ -204,11 +208,22 @@ async def handle_text(message: types.Message):
     txt = message.text.lower().strip()
     ctype = message.chat.type
     if ctype in ('group','supergroup'):
-        if txt.startswith("музыка "):
-            q=message.text.strip()[len("музыка "):].strip()
-            if q: await handle_group_search(message,q)
-            else: await message.reply("❌ после 'музыка' нужен запрос")
+        # Список префиксов для поиска музыки
+        prefixes = ["музыка ", "найти ", "трек ", "песня "]
+        prefix_used = None
+        
+        # Проверяем, есть ли в сообщении один из префиксов
+        for prefix in prefixes:
+            if txt.startswith(prefix):
+                prefix_used = prefix
+                break
+        
+        if prefix_used:
+            q = message.text.strip()[len(prefix_used):].strip()
+            if q: await handle_group_search(message, q)
+            else: await message.reply(f"❌ после '{prefix_used.strip()}' нужен запрос")
             return
+            
         m = re.search(r'https?://[^\s]+',message.text)
         if m: await handle_url_download(message,m.group(0)); return
         return
@@ -220,10 +235,15 @@ async def handle_text(message: types.Message):
         sid = str(uuid.uuid4())
         try:
             maxr=MAX_TRACKS//3
-            yt,sc = await asyncio.gather(search_youtube(message.text,maxr),search_soundcloud(message.text,maxr))
+            yt,sc,vk = await asyncio.gather(
+                search_youtube(message.text,maxr),
+                search_soundcloud(message.text,maxr),
+                search_vk(message.text,maxr)
+            )
             combined=[]
             for t in sc: combined.append({**t,'source':'soundcloud'})
             for t in yt: combined.append({**t,'source':'youtube'})
+            for t in vk: combined.append({**t,'source':'vk'})
             if not combined:
                 await bot.edit_message_text("❌ ничего не нашел", chat_id=searching.chat.id, message_id=searching.message_id)
                 return
@@ -244,10 +264,15 @@ async def handle_group_search(message: types.Message, query: str):
     sid = str(uuid.uuid4())
     try:
         maxr=MAX_TRACKS//3
-        yt,sc = await asyncio.gather(search_youtube(query,maxr),search_soundcloud(query,maxr))
+        yt,sc,vk = await asyncio.gather(
+            search_youtube(query,maxr),
+            search_soundcloud(query,maxr),
+            search_vk(query,maxr)
+        )
         combined=[]
         for t in sc: combined.append({**t,'source':'soundcloud'})
         for t in yt: combined.append({**t,'source':'youtube'})
+        for t in vk: combined.append({**t,'source':'vk'})
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
             return
