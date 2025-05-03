@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-VK_TOKEN = os.getenv('VK_TOKEN')
 
 TRACKS_PER_PAGE = 10
 MAX_TRACKS = 300

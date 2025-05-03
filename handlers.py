@@ -12,7 +12,7 @@ from aiogram.filters import Command
 from bot_instance import dp, bot
 from config import TRACKS_PER_PAGE, MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from state import search_results, download_tasks, download_queues, playlist_downloads
-from search import search_youtube, search_soundcloud, search_vk
+from search import search_youtube, search_soundcloud
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track
 from media_downloader import download_media_from_url
@@ -60,16 +60,12 @@ async def cmd_search(message: types.Message):
     query = " ".join(message.text.split()[1:])
     searching_message = await message.answer("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
-    max_results = MAX_TRACKS // 3  # По трети от максимума для каждого из трех источников
-    yt, sc, vk = await asyncio.gather(
+    max_results = MAX_TRACKS // 2
+    yt, sc = await asyncio.gather(
         search_youtube(query, max_results),
         search_soundcloud(query, max_results),
-        search_vk(query, max_results),
     )
     combined = []
-    for t in vk:
-        if 'source' not in t: t['source'] = 'vk'
-        combined.append(t)
     for t in sc:
         if 'source' not in t: t['source'] = 'soundcloud'
         combined.append(t)
@@ -234,14 +230,9 @@ async def handle_text(message: types.Message):
         searching = await message.answer("🔍 ищу музыку...")
         sid = str(uuid.uuid4())
         try:
-            maxr=MAX_TRACKS//3
-            yt,sc,vk = await asyncio.gather(
-                search_youtube(message.text,maxr),
-                search_soundcloud(message.text,maxr),
-                search_vk(message.text,maxr)
-            )
+            maxr=MAX_TRACKS//2
+            yt,sc = await asyncio.gather(search_youtube(message.text,maxr),search_soundcloud(message.text,maxr))
             combined=[]
-            for t in vk: combined.append({**t,'source':'vk'})
             for t in sc: combined.append({**t,'source':'soundcloud'})
             for t in yt: combined.append({**t,'source':'youtube'})
             if not combined:
@@ -263,14 +254,9 @@ async def handle_group_search(message: types.Message, query: str):
     status = await message.reply("🔍 ищу музыку...")
     sid = str(uuid.uuid4())
     try:
-        maxr=MAX_TRACKS//3
-        yt,sc,vk = await asyncio.gather(
-            search_youtube(query,maxr),
-            search_soundcloud(query,maxr),
-            search_vk(query,maxr)
-        )
+        maxr=MAX_TRACKS//2
+        yt,sc = await asyncio.gather(search_youtube(query,maxr),search_soundcloud(query,maxr))
         combined=[]
-        for t in vk: combined.append({**t,'source':'vk'})
         for t in sc: combined.append({**t,'source':'soundcloud'})
         for t in yt: combined.append({**t,'source':'youtube'})
         if not combined:
