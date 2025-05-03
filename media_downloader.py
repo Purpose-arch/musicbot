@@ -4,6 +4,7 @@ import uuid
 import asyncio
 import traceback
 import re
+import logging
 
 import yt_dlp
 from aiogram import types
@@ -16,6 +17,10 @@ from utils import extract_title_and_artist, set_mp3_metadata
 from track_downloader import _blocking_download_and_convert
 from download_queue import process_download_queue
 
+# Disable debug prints and exception stack traces
+logger = logging.getLogger(__name__)
+print = lambda *args, **kwargs: None
+traceback.print_exc = lambda *args, **kwargs: None
 
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
     """Downloads media (audio/video) or playlists from URL using yt-dlp."""

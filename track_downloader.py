@@ -5,6 +5,11 @@ import tempfile
 import traceback
 import uuid
 
+# Disable debug prints
+import builtins
+print = lambda *args, **kwargs: None
+traceback.print_exc = lambda *args, **kwargs: None
+
 import yt_dlp
 from aiogram.types import FSInputFile
 from mutagen.mp3 import MP3

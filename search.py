@@ -1,5 +1,11 @@
 import traceback
 import yt_dlp
+
+# Disable debug prints and exception stack traces
+import builtins
+print = lambda *args, **kwargs: None
+traceback.print_exc = lambda *args, **kwargs: None
+
 from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
 from utils import extract_title_and_artist
 
