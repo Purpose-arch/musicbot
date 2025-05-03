@@ -150,7 +150,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             entry = playlist_downloads.get(playlist_download_id)
             if entry:
                 for t in entry['tracks']:
-                    if t['url']==url and t['status']=='pending':
+                    if t['url']==url and t['status'] in ('pending','downloading'):
                         t['status']='success'
                         t['file_path']=temp_path
                         break
