@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Notify admin about start action
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ /start")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ /start")
     await message.answer(
         "🐈‍⬛ приветик я\n\n"
         "✅ персональный\n"
@@ -151,7 +151,7 @@ async def process_download_callback(callback: types.CallbackQuery):
         user = callback.from_user.id
         logger.info(f"User {callback.from_user.username} direct_download: {data['url']}")
         # Notify admin
-        await bot.send_message(ADMIN_ID, f"👤 {callback.from_user.username}\n➤ прямой скачивание: {data['url']}")
+        await bot.send_message(ADMIN_ID, f"👤 @{callback.from_user.username}\n➤ прямой скачивание: {data['url']}")
         if data['url'] in download_tasks.get(user, {}):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True); return
         if any(item[0]['url']==data['url'] for item in download_queues.get(user, [])):
