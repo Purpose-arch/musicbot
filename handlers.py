@@ -42,7 +42,7 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     # Notify admin about help action
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ /help")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ /help")
     help_text = """*как пользоваться ботом* 
 
 1️⃣ **поиск музыки** 
@@ -67,7 +67,7 @@ async def cmd_search(message: types.Message):
     query = " ".join(message.text.split()[1:])
     logger.info(f"User {message.from_user.username} search: {query}")
     # Notify admin
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ поиск: {query}")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ поиск: {query}")
     searching_message = await message.answer("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
     max_results = MAX_TRACKS // 2
@@ -97,7 +97,7 @@ async def cmd_search(message: types.Message):
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
     # Notify admin about cancel action
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ /cancel")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ /cancel")
     user_id = message.from_user.id
     cancelled_tasks = 0
     cancelled_playlists = 0
@@ -182,7 +182,7 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         data = tracks[idx]
         logger.info(f"User {callback.from_user.username} track_download: {data['title']} url {data['url']}")
         # Notify admin
-        await bot.send_message(ADMIN_ID, f"👤 {callback.from_user.username}\n➤ скачивание трека: {data['title']} ({data['url']})")
+        await bot.send_message(ADMIN_ID, f"👤 @{callback.from_user.username}\n➤ скачивание трека: {data['title']} ({data['url']})")
         user = callback.from_user.id
         if data['url'] in download_tasks.get(user, {}) or any(item[0]['url']==data['url'] for item in download_queues.get(user, [])):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True); return
@@ -204,7 +204,7 @@ async def process_page_callback(callback: types.CallbackQuery):
         _, p, sid = callback.data.split('_',2)
         page = int(p)
         # Notify admin about page switch
-        await bot.send_message(ADMIN_ID, f"👤 {callback.from_user.username}\n➤ переключение страницы: {page}")
+        await bot.send_message(ADMIN_ID, f"👤 @{callback.from_user.username}\n➤ переключение страницы: {page}")
         if sid not in search_results:
             await callback.answer("❌ результаты устарели", show_alert=True); return
         kb = create_tracks_keyboard(search_results[sid], page, sid)
@@ -216,7 +216,7 @@ async def process_page_callback(callback: types.CallbackQuery):
 @dp.callback_query(F.data=="info")
 async def process_info_callback(callback: types.CallbackQuery):
     # Notify admin about info request
-    await bot.send_message(ADMIN_ID, f"👤 {callback.from_user.username}\n➤ запрос информации")
+    await bot.send_message(ADMIN_ID, f"👤 @{callback.from_user.username}\n➤ запрос информации")
     await callback.answer()
 
 @dp.message()
@@ -249,7 +249,7 @@ async def handle_text(message: types.Message):
         if message.text.strip().startswith(('http://','https://')):
             await handle_url_download(message,message.text.strip()); return
         # Notify admin about private search
-        await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ поиск в личке: {message.text.strip()}")
+        await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ поиск в личке: {message.text.strip()}")
         # treat as search
         searching = await message.answer("🔍 ищу музыку...")
         sid = str(uuid.uuid4())
@@ -272,7 +272,7 @@ async def handle_text(message: types.Message):
 async def handle_url_download(message: types.Message, url: str):
     logger.info(f"User {message.from_user.username} download_url: {url}")
     # Notify admin
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ загрузка по ссылке: {url}")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ загрузка по ссылке: {url}")
     reply = message.reply if message.chat.type!='private' else message.answer
     status = await reply(f"⏳ пытаюсь скачать медиа по ссылке {url[:50]}...", disable_web_page_preview=True)
     await download_media_from_url(url, message, status)
@@ -280,7 +280,7 @@ async def handle_url_download(message: types.Message, url: str):
 async def handle_group_search(message: types.Message, query: str):
     logger.info(f"User {message.from_user.username} group_search: {query}")
     # Notify admin
-    await bot.send_message(ADMIN_ID, f"👤 {message.from_user.username}\n➤ поиск в группе: {query}")
+    await bot.send_message(ADMIN_ID, f"👤 @{message.from_user.username}\n➤ поиск в группе: {query}")
     status = await message.reply("🔍 ищу музыку...")
     sid = str(uuid.uuid4())
     try:
