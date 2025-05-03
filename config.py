@@ -40,4 +40,9 @@ YDL_MEDIA_OPTS = {
     'extract_flat': False,
     'ffmpeg_location': '/usr/bin/ffmpeg',
     'merge_output_format': 'mp4',
-} 
+}
+
+# Настройки для поиска и загрузки плейлистов
+SC_PLAYLIST_SEARCH_MODE = True  # Включить поиск плейлистов
+MAX_PLAYLIST_TRACKS = 100      # Максимальное количество треков в плейлисте
+PLAYLIST_SEARCH_RESULTS = 20   # Количество результатов при поиске плейлистов 

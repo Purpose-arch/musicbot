@@ -23,6 +23,7 @@ from media_downloader import download_media_from_url
 from download_queue import process_download_queue
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
 from utils import set_mp3_metadata
+from soundcloud_playlists import search_soundcloud_playlists, download_soundcloud_playlist
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,14 @@ async def cmd_help(message: types.Message):
 отправь мне прямую ссылку на трек или плейлист (youtube soundcloud и др) я попытаюсь скачать
 (плейлисты отправляются целиком после загрузки всех треков)
 
+3️⃣ **поиск плейлистов**
+используй команду /searchpl [запрос] чтобы найти плейлисты на SoundCloud
+
 *команды*
 /start - показать приветственное сообщение
 /help - показать это сообщение
 /search [запрос] - искать музыку по запросу
+/searchpl [запрос] - искать плейлисты на SoundCloud
 /cancel - отменить активные загрузки и очистить очередь"""
     await message.answer(help_text, parse_mode="Markdown")
 
@@ -513,3 +518,76 @@ async def handle_group_search(message: types.Message, query: str):
         await bot.edit_message_text(f"🎵 найдено {len(combined)}", chat_id=status.chat.id, message_id=status.message_id, reply_markup=kb)
     except Exception as e:
         await bot.edit_message_text(f"❌ ошибка: {e}", chat_id=status.chat.id, message_id=status.message_id) 
+
+@dp.message(Command("searchpl"))
+async def cmd_search_playlists(message: types.Message):
+    if len(message.text.split()) < 2:
+        await message.answer("❌ напиши что-нибудь после /searchpl плиз\nнапример /searchpl ambient playlists")
+        return
+    query = " ".join(message.text.split()[1:])
+    logger.info(f"User {message.from_user.username} playlist_search: {query}")
+    # Notify admin
+    await bot.send_message(
+        ADMIN_ID,
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск плейлистов: {query}',
+        parse_mode="HTML"
+    )
+    searching_message = await message.answer("🔍 ищу плейлисты на SoundCloud...")
+    search_id = str(uuid.uuid4())
+    
+    try:
+        sc_playlists = await search_soundcloud_playlists(query, 20)
+        
+        if not sc_playlists:
+            await message.answer("❌ плейлистов не найдено, попробуй другой запрос")
+            await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+            return
+            
+        search_results[search_id] = sc_playlists
+        keyboard = create_tracks_keyboard(sc_playlists, 0, search_id)
+        await message.answer(
+            f"📂 нашел для тебя {len(sc_playlists)} плейлистов на SoundCloud по запросу «{query}» ⬇",
+            reply_markup=keyboard
+        )
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+    except Exception as e:
+        logger.error(f"Error in playlist search: {e}", exc_info=True)
+        await message.answer(f"❌ ошибка при поиске плейлистов: {e}")
+        try:
+            await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+        except:
+            pass
+
+@dp.callback_query(F.data.startswith("dlpl_"))
+async def process_playlist_download_callback(callback: types.CallbackQuery):
+    try:
+        _, idx, sid = callback.data.split('_', 2)
+        idx = int(idx) - 1
+        if sid not in search_results:
+            await callback.answer("❌ результаты устарели", show_alert=True)
+            return
+            
+        playlists = search_results[sid]
+        if idx < 0 or idx >= len(playlists):
+            await callback.answer("❌ не найден плейлист", show_alert=True)
+            return
+            
+        playlist_data = playlists[idx]
+        logger.info(f"User {callback.from_user.username} playlist_download: {playlist_data['title']} url {playlist_data['url']}")
+        
+        # Notify admin
+        await bot.send_message(
+            ADMIN_ID,
+            f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ скачивание плейлиста: <a href="{playlist_data["url"]}">{playlist_data["title"]}</a>',
+            parse_mode="HTML"
+        )
+        
+        user = callback.from_user.id
+        status = await callback.message.answer(f"⏳ начинаю загрузку плейлиста {playlist_data['title']} ({playlist_data.get('track_count', '?')} треков)")
+        
+        # Запуск скачивания плейлиста
+        await download_soundcloud_playlist(playlist_data['url'], callback.message, status)
+        await callback.answer("Плейлист добавлен в очередь загрузки")
+    except Exception as e:
+        logger.error(f"Error in playlist download: {e}", exc_info=True)
+        await callback.answer(f"❌ ошибка: {e}", show_alert=True) 
