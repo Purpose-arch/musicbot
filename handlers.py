@@ -273,9 +273,21 @@ async def handle_media_recognition(message: types.Message):
         temp_dir_obj = tempfile.TemporaryDirectory()
         temp_dir = temp_dir_obj.name
         logger.info(f"Downloading media for recognition to {temp_dir}")
-        original_media_path = await message.download(destination_dir=temp_dir)
-        if not original_media_path or not os.path.exists(original_media_path):
-             raise ValueError("Не удалось скачать медиафайл.")
+        media_file = message.voice or message.audio or message.video_note
+        if not media_file:
+            raise ValueError("Сообщение не содержит voice/audio/video_note")
+
+        # Define the destination path within the temporary directory
+        # Use file_unique_id to ensure a unique name even if filename is missing
+        destination_path = os.path.join(temp_dir, f"{media_file.file_unique_id}.{media_file.mime_type.split('/')[-1] if media_file.mime_type else 'file'}")
+        
+        # Download using bot.download and the media object
+        await bot.download(media_file, destination=destination_path)
+        original_media_path = destination_path # Assign the correct path
+        
+        if not os.path.exists(original_media_path):
+            raise ValueError("Не удалось скачать медиафайл с помощью bot.download.")
+            
         logger.info(f"Media downloaded to: {original_media_path}")
         await status_message.edit_text("🔎 распознаю трек...")
 
