@@ -273,7 +273,7 @@ async def handle_media_recognition(message: types.Message):
         temp_dir_obj = tempfile.TemporaryDirectory()
         temp_dir = temp_dir_obj.name
         logger.info(f"Downloading media for recognition to {temp_dir}")
-        original_media_path = await message.download_media(temp_dir)
+        original_media_path = await message.download(destination_dir=temp_dir)
         if not original_media_path or not os.path.exists(original_media_path):
              raise ValueError("Не удалось скачать медиафайл.")
         logger.info(f"Media downloaded to: {original_media_path}")
