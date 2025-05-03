@@ -67,14 +67,14 @@ async def cmd_search(message: types.Message):
         search_vk(query, max_results),
     )
     combined = []
+    for t in vk:
+        if 'source' not in t: t['source'] = 'vk'
+        combined.append(t)
     for t in sc:
         if 'source' not in t: t['source'] = 'soundcloud'
         combined.append(t)
     for t in yt:
         if 'source' not in t: t['source'] = 'youtube'
-        combined.append(t)
-    for t in vk:
-        if 'source' not in t: t['source'] = 'vk'
         combined.append(t)
     if not combined:
         await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
@@ -241,9 +241,9 @@ async def handle_text(message: types.Message):
                 search_vk(message.text,maxr)
             )
             combined=[]
+            for t in vk: combined.append({**t,'source':'vk'})
             for t in sc: combined.append({**t,'source':'soundcloud'})
             for t in yt: combined.append({**t,'source':'youtube'})
-            for t in vk: combined.append({**t,'source':'vk'})
             if not combined:
                 await bot.edit_message_text("❌ ничего не нашел", chat_id=searching.chat.id, message_id=searching.message_id)
                 return
@@ -270,9 +270,9 @@ async def handle_group_search(message: types.Message, query: str):
             search_vk(query,maxr)
         )
         combined=[]
+        for t in vk: combined.append({**t,'source':'vk'})
         for t in sc: combined.append({**t,'source':'soundcloud'})
         for t in yt: combined.append({**t,'source':'youtube'})
-        for t in vk: combined.append({**t,'source':'vk'})
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
             return
