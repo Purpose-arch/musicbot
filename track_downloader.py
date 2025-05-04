@@ -4,6 +4,8 @@ import asyncio
 import tempfile
 import traceback
 import uuid
+import logging
+import time
 
 # Disable debug prints
 import builtins
@@ -13,239 +15,323 @@ traceback.print_exc = lambda *args, **kwargs: None
 import yt_dlp
 from aiogram.types import FSInputFile
 from mutagen.mp3 import MP3
+from pathlib import Path
+from aiogram import types
 
 from bot_instance import bot
 from config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
+from db import get_user_settings
+from media_downloader import create_progress_bar
 
+logger = logging.getLogger(__name__)
 
-def _blocking_download_and_convert(url, download_opts):
-    """Helper function to run blocking yt-dlp download."""
-    print(f"[_blocking_dl] Starting yt-dlp download command for: {url}")
+YDL_AUDIO_OPTS = {
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+    'quiet': True,
+    'verbose': False,
+    'no_warnings': True,
+    'prefer_ffmpeg': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': True,
+    'extract_flat': False
+}
+
+def _blocking_download_and_convert(url: str, download_opts: dict = None):
+    """Блокирующая функция для скачивания, выполняется в отдельном потоке"""
+    if download_opts is None:
+        download_opts = YDL_AUDIO_OPTS
     try:
         with yt_dlp.YoutubeDL(download_opts) as ydl:
             ydl.download([url])
-            print(f"[_blocking_dl] yt-dlp download command finished for: {url}.")
+        return True
     except Exception as e:
-        print(f"[_blocking_dl] ERROR during yt-dlp download command for {url}: {type(e).__name__} - {e}")
-        print(traceback.format_exc())
-        raise
+        logger.error(f"Download error: {e}")
+        traceback.print_exc()
+        return False
 
+class TrackProgressHook:
+    def __init__(self, status_message=None, is_group=False):
+        self.status_message = status_message
+        self.is_group = is_group
+        self.progress = 0
+        self.title = ""
+        self.artist = ""
+        self.last_update_time = 0
+        self.start_time = time.time()
+        self.speed = 0
+        self.eta = 0
 
-async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
-    """Downloads a single track. If part of a playlist (playlist_download_id is set),
-    it updates the central playlist tracker instead of sending the file directly."""
-    temp_path = None
+    async def __call__(self, d):
+        try:
+            if d['status'] == 'downloading':
+                # Извлекаем данные о прогрессе
+                if '_percent_str' in d:
+                    self.progress = float(d['_percent_str'].replace('%', '').strip())
+                
+                if 'speed' in d:
+                    self.speed = d['speed'] or 0
+                
+                if 'eta' in d:
+                    self.eta = d['eta'] or 0
+                
+                # Обновляем сообщение не чаще раза в 2 секунды
+                current_time = time.time()
+                if current_time - self.last_update_time >= 2.0:
+                    self.last_update_time = current_time
+                    
+                    progress_bar = create_progress_bar(int(self.progress))
+                    elapsed = current_time - self.start_time
+                    
+                    # Формируем сообщение о прогрессе
+                    if self.is_group:
+                        message = f"⏳ скачиваю... {progress_bar}"
+                    else:
+                        speed_mb = self.speed / 1024 / 1024 if self.speed else 0
+                        
+                        # Оцениваем оставшееся время
+                        eta_str = ""
+                        if self.eta and self.eta < 6000:  # Если ETA меньше 100 минут
+                            if self.eta < 60:
+                                eta_str = f"⌛ осталось: ~{self.eta} сек"
+                            else:
+                                eta_str = f"⌛ осталось: ~{self.eta // 60} мин {self.eta % 60} сек"
+                        
+                        message = f"🎵 трек: {self.title}\n👤 автор: {self.artist}\n⏳ скачиваю... {progress_bar}\n💾 {speed_mb:.1f} МБ/с\n{eta_str}"
+                    
+                    # Обновляем сообщение
+                    try:
+                        if hasattr(self.status_message, 'photo'):
+                            await self.status_message.edit_caption(message)
+                        else:
+                            await self.status_message.edit_text(message)
+                    except Exception as e:
+                        logger.error(f"Ошибка обновления сообщения о прогрессе: {e}")
+                        
+            elif d['status'] == 'finished':
+                if hasattr(self.status_message, 'photo'):
+                    await self.status_message.edit_caption("✅ загрузка завершена, обрабатываю...")
+                else:
+                    await self.status_message.edit_text("✅ загрузка завершена, обрабатываю...")
+                
+        except Exception as e:
+            logger.error(f"Ошибка в progress_hook: {e}")
+
+async def download_track(user_id, track_data, message_context, status_message, original_message_context=None, playlist_id=None):
+    """Скачивает трек и отправляет его пользователю"""
+    import json
     loop = asyncio.get_running_loop()
-    is_playlist_track = playlist_download_id is not None
-    playlist_entry = None
-    original_status_message_id = None
-    chat_id_for_updates = None
-
-    # Determine message context
-    if is_playlist_track:
-        if playlist_download_id in playlist_downloads:
-            playlist_entry = playlist_downloads[playlist_download_id]
-            original_status_message_id = playlist_entry.get('status_message_id')
-            chat_id_for_updates = playlist_entry.get('chat_id')
-        else:
-            print(f"ERROR: download_track called with playlist_id {playlist_download_id} but entry not found!")
-            if user_id in download_tasks:
-                download_tasks[user_id].pop(track_data.get('url', 'unknown_url'), None)
-                if not download_tasks[user_id]:
-                    del download_tasks[user_id]
-            return
-    elif callback_message and status_message:
-        chat_id_for_updates = callback_message.chat.id
-        original_status_message_id = status_message.message_id
-    elif original_message_context:
-        chat_id_for_updates = original_message_context.chat.id
-        original_status_message_id = None
-        print(f"Warning: download_track using original_message_context for single track, no status_message.")
-    else:
-        print(f"ERROR: download_track called for single track but missing message context!")
-        if user_id in download_tasks:
-            download_tasks[user_id].pop(track_data.get('url', 'unknown_url'), None)
-            if not download_tasks[user_id]:
-                del download_tasks[user_id]
-        return
-
-    title = track_data.get('title', 'Unknown Title')
-    artist = track_data.get('channel', 'Unknown Artist')
-    url = track_data.get('url')
+    is_group = message_context.chat.type in ('group', 'supergroup')
+    original_message_context = original_message_context or message_context
+    track_uuid = str(uuid.uuid4())
     
-    # Определяем тип чата для уменьшения сообщений в группе
-    is_group = False
-    if callback_message:
-        is_group = callback_message.chat.type in ('group', 'supergroup')
-    elif original_message_context:
-        is_group = original_message_context.chat.type in ('group', 'supergroup')
-
-    if not url:
-        print(f"ERROR: Missing URL in track_data for {title}")
-        if user_id in download_tasks:
-            download_tasks[user_id].pop('unknown_url', None)
-            if not download_tasks[user_id]:
-                del download_tasks[user_id]
-        return
-
+    # Получаем настройки пользователя
+    user_settings = await get_user_settings(user_id)
+    audio_quality = user_settings.get('audio_quality', 'high') if user_settings else 'high'
+    auto_lyrics = user_settings.get('auto_lyrics', True) if user_settings else True
+    
+    # Настраиваем качество аудио
+    audio_quality_settings = {}
+    if audio_quality == 'low':
+        audio_quality_settings = {'preferredquality': '96'}
+    elif audio_quality == 'medium':
+        audio_quality_settings = {'preferredquality': '128'}
+    else:  # high
+        audio_quality_settings = {'preferredquality': '192'}
+    
     try:
-        # Prepare file paths
-        safe_title = ''.join(c if c.isalnum() or c in ('.','_','-') else '_' for c in title).strip('_.-')[:100]
-        if not safe_title:
-            safe_title = f"audio_{uuid.uuid4()}"
         temp_dir = tempfile.gettempdir()
-        if is_playlist_track:
-            base_temp_path = os.path.join(temp_dir, f"pl_{playlist_download_id}_{safe_title}")
-        else:
-            task_uuid = str(uuid.uuid4())
-            base_temp_path = os.path.join(temp_dir, f"single_{task_uuid}_{safe_title}")
-        print(f"[Download Path] Base temp path set to: {base_temp_path}")
-
-        # Pre-cleanup
-        for ext in ['.mp3','.m4a','.webm','.mp4','.opus','.ogg','.aac','.part']:
-            p = f"{base_temp_path}{ext}"
+        safe_title = ''.join(c if c.isalnum() or c in ('_','-') else '_' for c in track_data['title']).strip('_.-')
+        if not safe_title: safe_title = f"audio_{track_uuid}"
+        base_temp_path = os.path.join(temp_dir, f"{safe_title}_{track_uuid}")
+        
+        # Удаляем конфликтующие файлы, если они есть
+        for ext in ['.mp3', '.m4a', '.ogg', '.wav', '.flac']:
+            p = base_temp_path + ext
             if os.path.exists(p):
-                try:
-                    os.remove(p)
-                    print(f"Removed existing file: {p}")
-                except Exception as e:
-                    print(f"Warning: Could not remove {p}: {e}")
-
-        # Download options
-        download_opts = {
-            'format':'bestaudio[ext=m4a]/bestaudio/best',
-            'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
-            'outtmpl':base_temp_path + '.%(ext)s',
-            'quiet':True,'verbose':False,'no_warnings':True,
-            'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
-            'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
+                try: os.remove(p)
+                except: pass
+        
+        # Настраиваем опции загрузки
+        ydl_opts = {
+            **YDL_AUDIO_OPTS,
+            'outtmpl': base_temp_path + '.%(ext)s',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                **audio_quality_settings
+            }]
         }
-        expected_mp3 = base_temp_path + '.mp3'
+        
+        # Создаем хук для отображения прогресса
+        progress_hook = TrackProgressHook(status_message, is_group)
+        progress_hook.title = track_data['title']
+        progress_hook.artist = track_data['channel']
+        
+        # Добавляем прогресс-хук в опции загрузки
+        ydl_opts['progress_hooks'] = [lambda d: asyncio.create_task(progress_hook(d))]
+        
+        # Загружаем трек
+        result = await loop.run_in_executor(None, _blocking_download_and_convert, track_data['url'], ydl_opts)
+        if not result:
+            raise Exception("Ошибка при скачивании")
+        
+        # Находим скачанный файл
+        track_path = base_temp_path + '.mp3'
+        if not os.path.exists(track_path):
+            raise Exception(f"Файл трека не найден после скачивания")
+        
+        # Обновляем метаданные
+        set_mp3_metadata(track_path, track_data['title'], track_data['channel'])
+        
+        # Готовим сообщение об успешном скачивании
+        if playlist_id:
+            # Для треков из плейлиста сохраняем путь к файлу
+            from state import playlist_downloads
+            for tr in playlist_downloads[playlist_id]['tracks']:
+                if tr['url'] == track_data['url']:
+                    tr['file_path'] = track_path
+                    tr['status'] = 'completed'
+                    break
+            
+            # Обновляем статус загрузки плейлиста
+            playlist_downloads[playlist_id]['completed_tracks'] += 1
+            completed = playlist_downloads[playlist_id]['completed_tracks']
+            total = playlist_downloads[playlist_id]['total_tracks']
+            playlist_title = playlist_downloads[playlist_id]['playlist_title']
+            
+            # Если плейлист не завершен, обновляем статус
+            if completed < total:
+                try:
+                    chat_id = playlist_downloads[playlist_id]['chat_id']
+                    status_id = playlist_downloads[playlist_id]['status_message_id']
+                    status_msg = await bot.get_message(chat_id, status_id)
+                    
+                    if hasattr(status_msg, 'photo'):
+                        await status_msg.edit_caption(
+                            f"📂 плейлист: {playlist_title}\n"
+                            f"💿 треков: {total} (загружено {completed})\n"
+                            f"⏳ {completed}/{total} [{completed*100//total}%]"
+                        )
+                    else:
+                        await status_msg.edit_text(
+                            f"📂 плейлист: {playlist_title}\n"
+                            f"💿 треков: {total} (загружено {completed})\n"
+                            f"⏳ {completed}/{total} [{completed*100//total}%]"
+                        )
+                except Exception as e:
+                    logger.error(f"Error updating playlist status: {e}")
+            
+            # Если плейлист завершен, отправляем все треки
+            if completed == total:
+                try:
+                    # Удаляем сообщение о статусе
+                    chat_id = playlist_downloads[playlist_id]['chat_id']
+                    status_id = playlist_downloads[playlist_id]['status_message_id']
+                    await bot.delete_message(chat_id=chat_id, message_id=status_id)
+                    
+                    # Формируем сообщение перед отправкой треков
+                    await bot.send_message(
+                        chat_id,
+                        f"✅ плейлист '{playlist_title}' ({total} треков) загружен"
+                    )
+                    
+                    # Отправляем все треки
+                    for i, tr in enumerate(sorted(playlist_downloads[playlist_id]['tracks'], key=lambda x: x['original_index'])):
+                        if tr['status'] != 'completed' or not tr.get('file_path') or not os.path.exists(tr['file_path']):
+                            continue
+                            
+                        # Отправляем аудио
+                        try:
+                            await bot.send_audio(
+                                chat_id,
+                                FSInputFile(tr['file_path']),
+                                caption=tr.get('title', f"Track {i+1}"),
+                                performer=tr.get('artist', 'Unknown'),
+                                title=tr.get('title', f"Track {i+1}")
+                            )
+                            
+                            # Удаляем файл после отправки
+                            try: os.remove(tr['file_path'])
+                            except: pass
+                            
+                        except Exception as e:
+                            logger.error(f"Error sending track {i}: {e}")
+                            
+                except Exception as e:
+                    logger.error(f"Error finalizing playlist: {e}")
+                    
+                # Удаляем плейлист из памяти
+                from state import playlist_downloads
+                playlist_downloads.pop(playlist_id, None)
+                
+            # Возвращаемся без отправки трека (он в плейлисте)
+            return
 
-        # Blocking download
-        print(f"Starting download for: {title} - {artist}")
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
-        print(f"Finished blocking download for: {title} - {artist}")
-
-        # Check file exists
-        if not os.path.exists(expected_mp3):
-            print(f"ERROR: MP3 not found at {expected_mp3}")
-            for ext in ['.m4a','.webm','.opus','.ogg','.aac']:
-                p = f"{base_temp_path}{ext}"
+        # Для одиночных треков - отправляем сразу
+        try:
+            # Удаляем сообщение о статусе
+            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+            
+            # Отправляем аудио
+            if not is_group:
+                sending = await original_message_context.answer("📤 отправляю трек...")
+                
+            await original_message_context.answer_audio(
+                FSInputFile(track_path),
+                caption=track_data['title'],
+                performer=track_data['channel'],
+                title=track_data['title']
+            )
+            
+            # Удаляем сообщение "отправляю трек..."
+            if not is_group and locals().get('sending'):
+                await bot.delete_message(chat_id=sending.chat.id, message_id=sending.message_id)
+            
+        except Exception as e:
+            logger.error(f"Error sending track: {e}")
+            raise
+    
+    except asyncio.CancelledError:
+        # Если задача была отменена, удаляем скачанные файлы и не отправляем ошибку
+        for ext in ['.mp3', '.m4a', '.ogg', '.wav', '.flac']:
+            p = base_temp_path + ext if 'base_temp_path' in locals() else os.path.join(tempfile.gettempdir(), f"audio_{track_uuid}{ext}")
+            if os.path.exists(p):
+                try: os.remove(p)
+                except: pass
+        raise
+        
+    except Exception as e:
+        logger.error(f"Download error: {e}", exc_info=True)
+        error_msg = f"❌ ошибка при скачивании: {str(e)}"
+        try:
+            if hasattr(status_message, 'photo'):
+                await status_message.edit_caption(error_msg)
+            else:
+                await status_message.edit_text(error_msg)
+        except:
+            try:
+                await original_message_context.answer(error_msg)
+            except:
+                pass
+    
+    finally:
+        # Удаляем временные файлы
+        if 'base_temp_path' in locals():
+            for ext in ['.mp3', '.m4a', '.ogg', '.wav', '.flac']:
+                p = base_temp_path + ext
                 if os.path.exists(p):
                     try: os.remove(p)
                     except: pass
-                    break
-            raise Exception(f"файл {expected_mp3} не создался после скачивания/конвертации")
-
-        temp_path = expected_mp3
-        print(f"Confirmed MP3 exists at: {temp_path}")
-
-        if os.path.getsize(temp_path) == 0:
-            raise Exception("скачанный файл пустой чет не то")
-
-        # Validate MP3
-        audio_check = MP3(temp_path)
-        if not audio_check.info.length > 0:
-            raise Exception("файл mp3 скачался но похоже битый (нулевая длина)")
-
-        # Success handling
-        if is_playlist_track:
-            entry = playlist_downloads.get(playlist_download_id)
-            if entry:
-                for t in entry['tracks']:
-                    if t['url']==url and t['status'] in ('pending','downloading'):
-                        t['status']='success'
-                        t['file_path']=temp_path
-                        break
-                entry['completed_tracks']+=1
-                if entry['completed_tracks'] < entry['total_tracks'] and entry['status_message_id']:
-                    try:
-                        text = f"⏳ загрузка плейлиста {entry['playlist_title']}: {entry['completed_tracks']}/{entry['total_tracks']}"
-                        await bot.edit_message_text(text, chat_id=entry['chat_id'], message_id=entry['status_message_id'])
-                    except: pass
-                if entry['completed_tracks']>=entry['total_tracks']:
-                    asyncio.create_task(send_completed_playlist(playlist_download_id))
-        else:
-            # Single track:
-            if set_mp3_metadata(temp_path, title, artist):
-                # Attempt Shazam recognition to refine title and artist
-                try:
-                    result = await shazam.recognize(temp_path)
-                    track_info = result.get("track", {})
-                    rec_title = track_info.get("title") or track_info.get("heading")
-                    rec_artist = track_info.get("subtitle")
-                    if rec_title and rec_artist:
-                        title, artist = rec_title, rec_artist
-                except Exception as e:
-                    print(f"Shazam recognition error: {e}")
-
-                # Fetch lyrics in priority order: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
-                lyrics = None
-                for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
-                    try:
-                        lyrics = await fetch(artist, title)
-                    except Exception:
-                        lyrics = None
-                    if lyrics:
-                        break
-
-                # Delete original status message if present
-                if original_status_message_id:
-                    try: await bot.delete_message(chat_id_for_updates, original_status_message_id)
-                    except: pass
-
-                ctx = callback_message or original_message_context
-                if ctx:
-                    # В группах сокращаем сообщения
-                    if not is_group:
-                        snd = await ctx.answer("📤 отправляю трек")
-                    
-                    # Send audio and capture the message
-                    audio_msg = await bot.send_audio(
-                        chat_id_for_updates,
-                        FSInputFile(temp_path),
-                        title=title,
-                        performer=artist
-                    )
-                    
-                    # Delete the temporary status message только в личных чатах
-                    if not is_group and locals().get('snd'):
-                        await bot.delete_message(snd.chat.id, snd.message_id)
-                        
-                    # Send lyrics if found (даже в группах)
-                    if lyrics:
-                        await bot.send_message(
-                            chat_id_for_updates,
-                            f"<blockquote expandable>{lyrics}</blockquote>",
-                            reply_to_message_id=audio_msg.message_id,
-                            parse_mode="HTML"
-                        )
-
-    except Exception as e:
-        print(f"ERROR in download_track: {e}")
-        traceback.print_exc()
-        # Failure handling omitted for brevity
-        raise
-    finally:
-        # Cleanup temp and task management
-        if temp_path and os.path.exists(temp_path):
-            delete = not is_playlist_track
-            if is_playlist_track:
-                failed=False
-                entry = playlist_downloads.get(playlist_download_id)
-                if entry:
-                    for t in entry['tracks']:
-                        if t['url']==url and t['status']=='failed': failed=True
-                delete = failed
-            if delete:
-                try: os.remove(temp_path)
-                except: pass
         if user_id in download_tasks:
-            download_tasks[user_id].pop(url, None)
+            download_tasks[user_id].pop(track_data['url'], None)
             if not download_tasks[user_id]:
                 del download_tasks[user_id]
         # Trigger next

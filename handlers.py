@@ -15,14 +15,15 @@ from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
 from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
-from state import search_results, download_tasks, download_queues, playlist_downloads
+from state import search_results, download_tasks, download_queues, playlist_downloads, user_settings
 from search import search_youtube, search_soundcloud
-from keyboard import create_tracks_keyboard
+from keyboard import create_tracks_keyboard, create_settings_keyboard
 from track_downloader import download_track, _blocking_download_and_convert
 from media_downloader import download_media_from_url
 from download_queue import process_download_queue
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
 from utils import set_mp3_metadata
+from db import init_db, get_user_settings, save_user_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,25 @@ async def cmd_start(message: types.Message):
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /start',
         parse_mode="HTML"
     )
+    
+    # Создаем начальные настройки пользователя, если их нет
+    user_id = message.from_user.id
+    settings = await get_user_settings(user_id)
+    if not settings:
+        default_settings = {
+            "preferred_source": "auto",
+            "audio_quality": "high",
+            "media_format": "single",
+            "auto_lyrics": True
+        }
+        await save_user_settings(user_id, default_settings)
+    
+    # Создаем кнопки для стартового сообщения
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📂 помощь", callback_data="show_help")],
+        [types.InlineKeyboardButton(text="⚙️ настройки", callback_data="show_settings")]
+    ])
+    
     await message.answer(
         "🐈‍⬛ приветик я\n\n"
         "✅ персональный\n"
@@ -45,17 +65,12 @@ async def cmd_start(message: types.Message):
         "🔗 скачиваю треки и плейлисты по ссылке (youtube soundcloud), а также видео (тикток)\n\n"
         "👥 также можно добавить меня в группу и использовать команду\n"
         "«музыка/найти/трек/песня (запрос)»\n"
-        "либо отправить ссылку там"
+        "либо отправить ссылку там",
+        reply_markup=keyboard
     )
 
-@dp.message(Command("help"))
-async def cmd_help(message: types.Message):
-    # Notify admin about help action
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /help',
-        parse_mode="HTML"
-    )
+@dp.callback_query(F.data=="show_help")
+async def show_help(callback: types.CallbackQuery):
     help_text = """*как пользоваться ботом* 
 
 1️⃣ **поиск музыки** 
@@ -69,8 +84,203 @@ async def cmd_help(message: types.Message):
 /start - показать приветственное сообщение
 /help - показать это сообщение
 /search [запрос] - искать музыку по запросу
+/settings - настроить бота под себя
 /cancel - отменить активные загрузки и очистить очередь"""
-    await message.answer(help_text, parse_mode="Markdown")
+
+    # Добавляем кнопку возврата
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="◀️ назад", callback_data="back_to_start")]
+    ])
+    
+    await callback.message.edit_text(help_text, parse_mode="Markdown", reply_markup=keyboard)
+    await callback.answer()
+
+@dp.callback_query(F.data=="back_to_start")
+async def back_to_start(callback: types.CallbackQuery):
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="📂 помощь", callback_data="show_help")],
+        [types.InlineKeyboardButton(text="⚙️ настройки", callback_data="show_settings")]
+    ])
+    
+    await callback.message.edit_text(
+        "🐈‍⬛ приветик я\n\n"
+        "✅ персональный\n"
+        "✅ иксперементальный\n"
+        "✅ скачивающий\n"
+        "✅ юный\n"
+        "✅ новобранец\n\n"
+        "🎵 ищу музыку по названию\n"
+        "🔗 скачиваю треки и плейлисты по ссылке (youtube soundcloud), а также видео (тикток)\n\n"
+        "👥 также можно добавить меня в группу и использовать команду\n"
+        "«музыка/найти/трек/песня (запрос)»\n"
+        "либо отправить ссылку там",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    # Notify admin about help action
+    await bot.send_message(
+        ADMIN_ID,
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /help',
+        parse_mode="HTML"
+    )
+    
+    # Добавляем кнопку для настроек
+    keyboard = types.InlineKeyboardMarkup(inline_keyboard=[
+        [types.InlineKeyboardButton(text="⚙️ настройки", callback_data="show_settings")]
+    ])
+    
+    help_text = """*как пользоваться ботом* 
+
+1️⃣ **поиск музыки** 
+просто напиши название трека или исполнителя я поищу на soundcloud и youtube и покажу список
+
+2️⃣ **скачивание по ссылке** 
+отправь мне прямую ссылку на трек или плейлист (youtube soundcloud и др) я попытаюсь скачать
+(плейлисты отправляются целиком после загрузки всех треков)
+
+*команды*
+/start - показать приветственное сообщение
+/help - показать это сообщение
+/search [запрос] - искать музыку по запросу
+/settings - настроить бота под себя
+/cancel - отменить активные загрузки и очистить очередь"""
+    await message.answer(help_text, parse_mode="Markdown", reply_markup=keyboard)
+
+@dp.message(Command("settings"))
+async def cmd_settings(message: types.Message):
+    # Notify admin about settings action
+    await bot.send_message(
+        ADMIN_ID,
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /settings',
+        parse_mode="HTML"
+    )
+    
+    user_id = message.from_user.id
+    settings = await get_user_settings(user_id)
+    if not settings:
+        default_settings = {
+            "preferred_source": "auto",
+            "audio_quality": "high",
+            "media_format": "single",
+            "auto_lyrics": True
+        }
+        await save_user_settings(user_id, default_settings)
+        settings = default_settings
+    
+    keyboard = await create_settings_keyboard(settings)
+    
+    await message.answer(
+        "⚙️ *настройки*\n\n"
+        f"🎵 источник: {get_source_display(settings['preferred_source'])}\n"
+        f"🔊 качество аудио: {get_quality_display(settings['audio_quality'])}\n"
+        f"📦 формат отправки: {get_format_display(settings['media_format'])}\n"
+        f"📝 автопоиск текстов: {'включен' if settings['auto_lyrics'] else 'выключен'}\n\n"
+        "выбери параметр для изменения:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+@dp.callback_query(F.data.startswith("settings_"))
+async def handle_settings_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    settings = await get_user_settings(user_id)
+    if not settings:
+        default_settings = {
+            "preferred_source": "auto",
+            "audio_quality": "high",
+            "media_format": "single",
+            "auto_lyrics": True
+        }
+        await save_user_settings(user_id, default_settings)
+        settings = default_settings
+    
+    data = callback.data.split("_")
+    if len(data) < 3:
+        await callback.answer("неверный формат данных")
+        return
+    
+    setting_type = data[1]
+    setting_value = data[2]
+    
+    if setting_type == "source":
+        settings["preferred_source"] = setting_value
+    elif setting_type == "quality":
+        settings["audio_quality"] = setting_value
+    elif setting_type == "format":
+        settings["media_format"] = setting_value
+    elif setting_type == "lyrics":
+        settings["auto_lyrics"] = setting_value == "true"
+    
+    await save_user_settings(user_id, settings)
+    keyboard = await create_settings_keyboard(settings)
+    
+    await callback.message.edit_text(
+        "⚙️ *настройки*\n\n"
+        f"🎵 источник: {get_source_display(settings['preferred_source'])}\n"
+        f"🔊 качество аудио: {get_quality_display(settings['audio_quality'])}\n"
+        f"📦 формат отправки: {get_format_display(settings['media_format'])}\n"
+        f"📝 автопоиск текстов: {'включен' if settings['auto_lyrics'] else 'выключен'}\n\n"
+        "выбери параметр для изменения:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    
+    await callback.answer("настройки сохранены")
+
+@dp.callback_query(F.data=="show_settings")
+async def show_settings(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    settings = await get_user_settings(user_id)
+    if not settings:
+        default_settings = {
+            "preferred_source": "auto",
+            "audio_quality": "high",
+            "media_format": "single",
+            "auto_lyrics": True
+        }
+        await save_user_settings(user_id, default_settings)
+        settings = default_settings
+    
+    keyboard = await create_settings_keyboard(settings)
+    
+    await callback.message.edit_text(
+        "⚙️ *настройки*\n\n"
+        f"🎵 источник: {get_source_display(settings['preferred_source'])}\n"
+        f"🔊 качество аудио: {get_quality_display(settings['audio_quality'])}\n"
+        f"📦 формат отправки: {get_format_display(settings['media_format'])}\n"
+        f"📝 автопоиск текстов: {'включен' if settings['auto_lyrics'] else 'выключен'}\n\n"
+        "выбери параметр для изменения:",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+def get_source_display(source):
+    sources = {
+        "auto": "автовыбор",
+        "youtube": "youtube",
+        "soundcloud": "soundcloud"
+    }
+    return sources.get(source, "автовыбор")
+
+def get_quality_display(quality):
+    qualities = {
+        "low": "низкое (экономия трафика)",
+        "medium": "среднее",
+        "high": "высокое"
+    }
+    return qualities.get(quality, "высокое")
+
+def get_format_display(format_type):
+    formats = {
+        "single": "по одному треку",
+        "group": "группой",
+        "archive": "архивом"
+    }
+    return formats.get(format_type, "по одному треку")
 
 @dp.message(Command("search"))
 async def cmd_search(message: types.Message):
@@ -94,10 +304,23 @@ async def cmd_search(message: types.Message):
     # Используем разные лимиты в зависимости от типа чата
     max_results = GROUP_MAX_TRACKS // 2 if is_group else MAX_TRACKS // 2
     
-    yt, sc = await asyncio.gather(
-        search_youtube(query, max_results),
-        search_soundcloud(query, max_results),
-    )
+    # Получаем настройки пользователя для предпочтительного источника
+    user_settings = await get_user_settings(message.from_user.id)
+    preferred_source = user_settings.get('preferred_source', 'auto') if user_settings else 'auto'
+    
+    # Выполняем поиск в зависимости от предпочтений
+    if preferred_source == 'youtube':
+        yt = await search_youtube(query, max_results * 2)
+        sc = []
+    elif preferred_source == 'soundcloud':
+        yt = []
+        sc = await search_soundcloud(query, max_results * 2)
+    else:  # auto
+        yt, sc = await asyncio.gather(
+            search_youtube(query, max_results),
+            search_soundcloud(query, max_results),
+        )
+    
     combined = []
     for t in sc:
         if 'source' not in t: t['source'] = 'soundcloud'
@@ -105,10 +328,12 @@ async def cmd_search(message: types.Message):
     for t in yt:
         if 'source' not in t: t['source'] = 'youtube'
         combined.append(t)
+    
     if not combined:
         await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
+    
     search_results[search_id] = combined
     
     # Используем параметр is_group при создании клавиатуры
@@ -196,11 +421,47 @@ async def process_download_callback(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
+            # Получаем миниатюру трека, если это YouTube
+            thumbnail_url = None
+            if data.get('source') == 'youtube':
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                        info = ydl.extract_info(data['url'], download=False)
+                        if info and 'thumbnails' in info and info['thumbnails']:
+                            thumbnail_url = info['thumbnails'][-1]['url']  # Берем последнюю (обычно самую качественную)
+                except Exception as e:
+                    logger.error(f"Error getting thumbnail: {e}")
+            
+            # Добавляем кнопку отмены
+            cancel_button = types.InlineKeyboardButton(text="❌ отменить", callback_data=f"cancel_{user}_{data['url']}")
+            cancel_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[cancel_button]])
+            
             # Сокращаем сообщение в группах
             if is_group:
-                status = await callback.message.answer(f"⏳ скачиваю...")
+                if thumbnail_url:
+                    status = await callback.message.answer_photo(
+                        thumbnail_url,
+                        caption=f"⏳ скачиваю...",
+                        reply_markup=cancel_keyboard
+                    )
+                else:
+                    status = await callback.message.answer(
+                        f"⏳ скачиваю...",
+                        reply_markup=cancel_keyboard
+                    )
             else:
-                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+                if thumbnail_url:
+                    status = await callback.message.answer_photo(
+                        thumbnail_url,
+                        caption=f"🎵 трек: {data['title']}\n👤 автор: {data['channel']}\n⏳ скачиваю... [░░░░░░] 0%",
+                        reply_markup=cancel_keyboard
+                    )
+                else:
+                    status = await callback.message.answer(
+                        f"🎵 трек: {data['title']}\n👤 автор: {data['channel']}\n⏳ скачиваю... [░░░░░░] 0%",
+                        reply_markup=cancel_keyboard
+                    )
+            
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
@@ -208,6 +469,47 @@ async def process_download_callback(callback: types.CallbackQuery):
     except Exception as e:
         await callback.message.answer(f"❌ ошибка: {e}")
         await callback.answer()
+
+@dp.callback_query(F.data.startswith("cancel_"))
+async def cancel_download(callback: types.CallbackQuery):
+    _, user_id, url_encoded = callback.data.split("_", 2)
+    user_id = int(user_id)
+    
+    if callback.from_user.id != user_id:
+        await callback.answer("эту загрузку может отменить только тот, кто ее начал", show_alert=True)
+        return
+    
+    cancelled = False
+    
+    # Отменяем задачу скачивания
+    if user_id in download_tasks and url_encoded in download_tasks[user_id]:
+        task = download_tasks[user_id][url_encoded]
+        if not task.done() and not task.cancelled():
+            task.cancel()
+            cancelled = True
+    
+    # Удаляем из очереди, если есть
+    if user_id in download_queues:
+        download_queues[user_id] = [item for item in download_queues[user_id] if item[0]['url'] != url_encoded]
+        if not download_queues[user_id]:
+            download_queues.pop(user_id, None)
+    
+    # Обновляем сообщение
+    try:
+        await callback.message.edit_text(
+            f"❌ загрузка отменена",
+            reply_markup=None
+        )
+    except Exception:
+        try:
+            await callback.message.edit_caption(
+                f"❌ загрузка отменена",
+                reply_markup=None
+            )
+        except Exception as e:
+            logger.error(f"Error updating cancel message: {e}")
+    
+    await callback.answer("загрузка отменена")
 
 @dp.callback_query(F.data.startswith("dl_"))
 async def process_download_callback_with_index(callback: types.CallbackQuery):
@@ -236,11 +538,47 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
+            # Получаем миниатюру трека, если это YouTube
+            thumbnail_url = None
+            if data.get('source') == 'youtube':
+                try:
+                    with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                        info = ydl.extract_info(data['url'], download=False)
+                        if info and 'thumbnails' in info and info['thumbnails']:
+                            thumbnail_url = info['thumbnails'][-1]['url']  # Берем последнюю (обычно самую качественную)
+                except Exception as e:
+                    logger.error(f"Error getting thumbnail: {e}")
+            
+            # Добавляем кнопку отмены
+            cancel_button = types.InlineKeyboardButton(text="❌ отменить", callback_data=f"cancel_{user}_{data['url']}")
+            cancel_keyboard = types.InlineKeyboardMarkup(inline_keyboard=[[cancel_button]])
+            
             # Сокращаем сообщение в группах
             if is_group:
-                status = await callback.message.answer(f"⏳ скачиваю...")
+                if thumbnail_url:
+                    status = await callback.message.answer_photo(
+                        thumbnail_url,
+                        caption=f"⏳ скачиваю...",
+                        reply_markup=cancel_keyboard
+                    )
+                else:
+                    status = await callback.message.answer(
+                        f"⏳ скачиваю...",
+                        reply_markup=cancel_keyboard
+                    )
             else:
-                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+                if thumbnail_url:
+                    status = await callback.message.answer_photo(
+                        thumbnail_url,
+                        caption=f"🎵 трек: {data['title']}\n👤 автор: {data['channel']}\n⏳ скачиваю... [░░░░░░] 0%",
+                        reply_markup=cancel_keyboard
+                    )
+                else:
+                    status = await callback.message.answer(
+                        f"🎵 трек: {data['title']}\n👤 автор: {data['channel']}\n⏳ скачиваю... [░░░░░░] 0%",
+                        reply_markup=cancel_keyboard
+                    )
+            
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
@@ -263,10 +601,6 @@ async def process_page_callback(callback: types.CallbackQuery):
         await callback.answer()
     except:
         await callback.answer("❌ ошибка при переключении страницы", show_alert=True)
-
-@dp.callback_query(F.data=="info")
-async def process_info_callback(callback: types.CallbackQuery):
-    await callback.answer()
 
 @dp.message((F.voice | F.audio | F.video_note))
 async def handle_media_recognition(message: types.Message):

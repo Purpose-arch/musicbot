@@ -33,9 +33,11 @@ def create_tracks_keyboard(tracks, page=0, search_id="", is_group=False):
             duration_str = f" ({minutes}:{seconds:02d})"
         else:
             duration_str = ""
+        # Добавляем иконку источника
+        source_icon = "🔴" if track.get('source') == 'youtube' else "🟠" if track.get('source') == 'soundcloud' else "🎵"
         buttons.append([
             InlineKeyboardButton(
-                text=f"🎧 {track['title']} - {track['channel']}{duration_str}",
+                text=f"{source_icon} {track['title']} - {track['channel']}{duration_str}",
                 callback_data=callback_data
             )
         ])
@@ -62,4 +64,74 @@ def create_tracks_keyboard(tracks, page=0, search_id="", is_group=False):
                 )
             )
         buttons.append(nav_buttons)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+async def create_settings_keyboard(settings):
+    """Генерация инлайн-клавиатуры для настроек пользователя"""
+    buttons = []
+    
+    # Кнопки для выбора источника
+    source_buttons = []
+    for source, label in [('auto', 'автовыбор'), ('youtube', 'youtube'), ('soundcloud', 'soundcloud')]:
+        is_selected = settings.get('preferred_source') == source
+        mark = "✅ " if is_selected else ""
+        source_buttons.append(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"settings_source_{source}"
+            )
+        )
+    buttons.append([InlineKeyboardButton(text="🎵 источник музыки:", callback_data="info")])
+    buttons.append(source_buttons)
+    
+    # Кнопки для выбора качества
+    quality_buttons = []
+    for quality, label in [('low', 'низкое'), ('medium', 'среднее'), ('high', 'высокое')]:
+        is_selected = settings.get('audio_quality') == quality
+        mark = "✅ " if is_selected else ""
+        quality_buttons.append(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"settings_quality_{quality}"
+            )
+        )
+    buttons.append([InlineKeyboardButton(text="🔊 качество аудио:", callback_data="info")])
+    buttons.append(quality_buttons)
+    
+    # Кнопки для выбора формата
+    format_buttons = []
+    for format_type, label in [('single', 'по одному'), ('group', 'группой'), ('archive', 'архивом')]:
+        is_selected = settings.get('media_format') == format_type
+        mark = "✅ " if is_selected else ""
+        format_buttons.append(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"settings_format_{format_type}"
+            )
+        )
+    buttons.append([InlineKeyboardButton(text="📦 формат отправки:", callback_data="info")])
+    buttons.append(format_buttons)
+    
+    # Кнопки для автопоиска текстов
+    lyrics_buttons = []
+    for lyrics, label in [('true', 'включен'), ('false', 'выключен')]:
+        is_selected = settings.get('auto_lyrics') == (lyrics == 'true')
+        mark = "✅ " if is_selected else ""
+        lyrics_buttons.append(
+            InlineKeyboardButton(
+                text=f"{mark}{label}",
+                callback_data=f"settings_lyrics_{lyrics}"
+            )
+        )
+    buttons.append([InlineKeyboardButton(text="📝 автопоиск текстов:", callback_data="info")])
+    buttons.append(lyrics_buttons)
+    
+    # Кнопка "назад"
+    buttons.append([
+        InlineKeyboardButton(
+            text="◀️ назад",
+            callback_data="back_to_start"
+        )
+    ])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons) 
