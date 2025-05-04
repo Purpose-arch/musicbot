@@ -1,12 +1,12 @@
 discord.py
-python-dotenv>=1.0.0
+python-dotenv
 requests
-aiogram>=3.0.0
+aiogram==3.19.0
 vkpymusic
-mutagen>=1.47.0
+mutagen
 httpx
-aiohttp>=3.8.5
-yt-dlp>=2023.7.6
+aiohttp
+yt-dlp
 ffmpeg-python
 shazamio
 PyLyrics
@@ -15,6 +15,3 @@ musicxmatch-api
 lyricsgenius
 chartlyrics
 yandex-music
-asyncio>=3.4.3
-aiolimiter>=1.1.0
-asyncpg>=0.28.0

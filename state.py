@@ -9,7 +9,4 @@ from collections import defaultdict
 download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)
-playlist_downloads = {}
-
-# Настройки пользователей (сохраняется в PostgreSQL)
-user_settings = {} 
+playlist_downloads = {} 
