@@ -11,7 +11,7 @@ from aiogram import types
 from aiogram.types import FSInputFile
 
 from bot_instance import bot
-from config import MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
+from config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from state import download_queues, download_tasks, playlist_downloads
 from utils import extract_title_and_artist, set_mp3_metadata
 from track_downloader import _blocking_download_and_convert
@@ -26,6 +26,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     """Downloads media (audio/video) or playlists from URL using yt-dlp."""
     loop = asyncio.get_running_loop()
     user_id = original_message.from_user.id
+    is_group = original_message.chat.type in ('group', 'supergroup')
     download_uuid = str(uuid.uuid4())
     temp_dir = tempfile.gettempdir()
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
@@ -87,16 +88,33 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                     artist = artist_extracted
                 processed.append({'original_index': idx, 'url': entry_url, 'title': title, 'artist': artist, 'status':'pending','file_path':None,'source':e.get('ie_key','')})
 
+            # Используем разные лимиты для групп и личных чатов
+            max_tracks = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
+            
             total = len(processed)
             if total == 0:
                 await bot.edit_message_text(f"❌ нет треков для {playlist_title}", chat_id=status_message.chat.id, message_id=status_message.message_id)
                 return
-            if total > MAX_TRACKS:
-                processed = processed[:MAX_TRACKS]; total = MAX_TRACKS
+            if total > max_tracks:
+                processed = processed[:max_tracks]; total = max_tracks
 
             # add to playlist_downloads
-            playlist_downloads[playlist_id] = {'user_id':user_id,'chat_id':original_message.chat.id,'status_message_id':status_message.message_id,'playlist_title':playlist_title,'total_tracks':total,'completed_tracks':0,'tracks':processed}
-            await bot.edit_message_text(f"⏳ найден плейлист '{playlist_title}' ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            playlist_downloads[playlist_id] = {
+                'user_id': user_id,
+                'chat_id': original_message.chat.id,
+                'chat_type': original_message.chat.type,  # Сохраняем тип чата
+                'status_message_id': status_message.message_id,
+                'playlist_title': playlist_title,
+                'total_tracks': total,
+                'completed_tracks': 0,
+                'tracks': processed
+            }
+            
+            # Сокращаем сообщение в группах
+            if is_group:
+                await bot.edit_message_text(f"⏳ скачиваю плейлист '{playlist_title}' ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            else:
+                await bot.edit_message_text(f"⏳ найден плейлист '{playlist_title}' ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
 
             # queue tracks
             download_queues.setdefault(user_id,[])
@@ -112,7 +130,11 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # single media
         print(f"[URL] Single media download for: {url}")
         try:
-            await bot.edit_message_text(f"⏳ качаю медиа", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            # Сокращаем сообщение в группах
+            if is_group:
+                await bot.edit_message_text(f"⏳ скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            else:
+                await bot.edit_message_text(f"⏳ качаю медиа", chat_id=status_message.chat.id, message_id=status_message.message_id)
         except: pass
 
         # download
@@ -140,7 +162,11 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
         # send
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        send_msg = await original_message.answer("📤 отправляю медиа")
+        
+        # В группах не показываем промежуточное сообщение об отправке
+        if not is_group:
+            send_msg = await original_message.answer("📤 отправляю медиа")
+            
         ext = os.path.splitext(actual_downloaded_path)[1].lower()
         if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
             if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
@@ -151,8 +177,11 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             await original_message.answer_video(FSInputFile(actual_downloaded_path))
         else:
             await original_message.answer_document(FSInputFile(actual_downloaded_path))
-        try: await bot.delete_message(chat_id=send_msg.chat.id, message_id=send_msg.message_id)
-        except: pass
+            
+        # Удаляем промежуточное сообщение только если оно было создано (не в группах)
+        if not is_group and locals().get('send_msg'):
+            try: await bot.delete_message(chat_id=send_msg.chat.id, message_id=send_msg.message_id)
+            except: pass
 
     except Exception as e:
         print(f"[URL] ERROR: {e}")
@@ -164,4 +193,4 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     finally:
         if actual_downloaded_path and os.path.exists(actual_downloaded_path):
             try: os.remove(actual_downloaded_path)
-            except: pass 
+            except: pass

@@ -15,7 +15,7 @@ from aiogram.types import FSInputFile
 from mutagen.mp3 import MP3
 
 from bot_instance import bot
-from config import MAX_PARALLEL_DOWNLOADS
+from config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
@@ -75,6 +75,13 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     title = track_data.get('title', 'Unknown Title')
     artist = track_data.get('channel', 'Unknown Artist')
     url = track_data.get('url')
+    
+    # Определяем тип чата для уменьшения сообщений в группе
+    is_group = False
+    if callback_message:
+        is_group = callback_message.chat.type in ('group', 'supergroup')
+    elif original_message_context:
+        is_group = original_message_context.chat.type in ('group', 'supergroup')
 
     if not url:
         print(f"ERROR: Missing URL in track_data for {title}")
@@ -193,8 +200,10 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
 
                 ctx = callback_message or original_message_context
                 if ctx:
-                    # Notify user about sending track
-                    snd = await ctx.answer("📤 отправляю трек")
+                    # В группах сокращаем сообщения
+                    if not is_group:
+                        snd = await ctx.answer("📤 отправляю трек")
+                    
                     # Send audio and capture the message
                     audio_msg = await bot.send_audio(
                         chat_id_for_updates,
@@ -202,9 +211,12 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                         title=title,
                         performer=artist
                     )
-                    # Delete the temporary status message
-                    await bot.delete_message(snd.chat.id, snd.message_id)
-                    # Send lyrics if found
+                    
+                    # Delete the temporary status message только в личных чатах
+                    if not is_group and locals().get('snd'):
+                        await bot.delete_message(snd.chat.id, snd.message_id)
+                        
+                    # Send lyrics if found (даже в группах)
                     if lyrics:
                         await bot.send_message(
                             chat_id_for_updates,
@@ -249,24 +261,40 @@ async def send_completed_playlist(playlist_download_id):
     entry = playlist_downloads.pop(playlist_download_id, None)
     if not entry: return
     user_id = entry['user_id']; chat_id = entry['chat_id']
+    is_group = 'chat_type' in entry and entry['chat_type'] in ('group', 'supergroup')
+    
     succ = [t for t in entry['tracks'] if t['status']=='success']
     failed = [t for t in entry['tracks'] if t['status']=='failed']
-    text = f"✅ плейлист '{entry['playlist_title']}' скачан, отправляю {len(succ)}"
-    if failed: text += f" (не удалось {len(failed)})"
+    
+    # Сокращаем сообщение в группах
+    if is_group:
+        text = f"✅ плейлист: отправляю {len(succ)} треков"
+    else:
+        text = f"✅ плейлист '{entry['playlist_title']}' скачан, отправляю {len(succ)}"
+        
+    if failed: 
+        if is_group:
+            text += f" ({len(failed)} не удалось)"
+        else:
+            text += f" (не удалось {len(failed)})"
+            
     if entry['status_message_id']:
         try: await bot.edit_message_text(text, chat_id, entry['status_message_id'])
         except: pass
+        
     for t in succ:
         if t.get('file_path') and os.path.exists(t['file_path']):
             await bot.send_audio(chat_id, FSInputFile(t['file_path']), title=t['title'], performer=t.get('artist'))
             try: os.remove(t['file_path'])
             except: pass
+            
     # Cleanup failed files
     for t in failed:
         p = t.get('file_path')
         if p and os.path.exists(p):
             try: os.remove(p)
             except: pass
+            
     # delete the playlist status message after sending all tracks
     if entry.get('status_message_id'):
         try:

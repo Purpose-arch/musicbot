@@ -3,13 +3,14 @@ import math
 import base64
 import json
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import TRACKS_PER_PAGE
+from config import TRACKS_PER_PAGE, GROUP_TRACKS_PER_PAGE
 
-def create_tracks_keyboard(tracks, page=0, search_id=""):
+def create_tracks_keyboard(tracks, page=0, search_id="", is_group=False):
     """Генерация инлайн-клавиатуры для списка треков"""
-    total_pages = math.ceil(len(tracks) / TRACKS_PER_PAGE)
-    start_idx = page * TRACKS_PER_PAGE
-    end_idx = min(start_idx + TRACKS_PER_PAGE, len(tracks))
+    tracks_per_page = GROUP_TRACKS_PER_PAGE if is_group else TRACKS_PER_PAGE
+    total_pages = math.ceil(len(tracks) / tracks_per_page)
+    start_idx = page * tracks_per_page
+    end_idx = min(start_idx + tracks_per_page, len(tracks))
     buttons = []
     for i in range(start_idx, end_idx):
         track = tracks[i]

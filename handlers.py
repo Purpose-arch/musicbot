@@ -14,7 +14,7 @@ from aiogram import F, types
 from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
-from config import TRACKS_PER_PAGE, MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
+from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
 from state import search_results, download_tasks, download_queues, playlist_downloads
 from search import search_youtube, search_soundcloud
 from keyboard import create_tracks_keyboard
@@ -85,9 +85,15 @@ async def cmd_search(message: types.Message):
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск: {query}',
         parse_mode="HTML"
     )
+    
+    # Проверяем тип чата
+    is_group = message.chat.type in ('group', 'supergroup')
+    
     searching_message = await message.answer("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
-    max_results = MAX_TRACKS // 2
+    # Используем разные лимиты в зависимости от типа чата
+    max_results = GROUP_MAX_TRACKS // 2 if is_group else MAX_TRACKS // 2
+    
     yt, sc = await asyncio.gather(
         search_youtube(query, max_results),
         search_soundcloud(query, max_results),
@@ -104,7 +110,10 @@ async def cmd_search(message: types.Message):
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     search_results[search_id] = combined
-    keyboard = create_tracks_keyboard(combined, 0, search_id)
+    
+    # Используем параметр is_group при создании клавиатуры
+    keyboard = create_tracks_keyboard(combined, 0, search_id, is_group)
+    
     await message.answer(
         f"🎵 нашел для тебя {len(combined)} треков по запросу «{query}» ⬇",
         reply_markup=keyboard
@@ -171,6 +180,8 @@ async def process_download_callback(callback: types.CallbackQuery):
         data = json.loads(base64.b64decode(callback.data[2:]).decode('utf-8'))
         user = callback.from_user.id
         logger.info(f"User {callback.from_user.username} direct_download: {data['url']}")
+        # Определяем тип чата
+        is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
         await bot.send_message(
             ADMIN_ID,
@@ -185,7 +196,11 @@ async def process_download_callback(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
-            status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+            # Сокращаем сообщение в группах
+            if is_group:
+                status = await callback.message.answer(f"⏳ скачиваю...")
+            else:
+                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
@@ -206,6 +221,8 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
             await callback.answer("❌ не найден трек", show_alert=True); return
         data = tracks[idx]
         logger.info(f"User {callback.from_user.username} track_download: {data['title']} url {data['url']}")
+        # Определяем тип чата
+        is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
         await bot.send_message(
             ADMIN_ID,
@@ -219,7 +236,11 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
-            status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+            # Сокращаем сообщение в группах
+            if is_group:
+                status = await callback.message.answer(f"⏳ скачиваю...")
+            else:
+                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
@@ -234,7 +255,10 @@ async def process_page_callback(callback: types.CallbackQuery):
         page = int(p)
         if sid not in search_results:
             await callback.answer("❌ результаты устарели", show_alert=True); return
-        kb = create_tracks_keyboard(search_results[sid], page, sid)
+        # Определяем тип чата
+        is_group = callback.message.chat.type in ('group', 'supergroup')
+        # Передаем параметр is_group при создании клавиатуры
+        kb = create_tracks_keyboard(search_results[sid], page, sid, is_group)
         await callback.message.edit_reply_markup(reply_markup=kb)
         await callback.answer()
     except:
@@ -253,6 +277,7 @@ async def handle_media_recognition(message: types.Message):
     user_id = message.from_user.id
     chat_id = message.chat.id
     message_id = message.message_id
+    is_group = message.chat.type in ('group', 'supergroup')
 
     # Notify admin
     media_type = "voice" if message.voice else ("audio" if message.audio else "video note")
@@ -298,7 +323,11 @@ async def handle_media_recognition(message: types.Message):
         rec_artist = track_info.get("subtitle", "Unknown Artist")
 
         if rec_title == "Unknown Title" or rec_artist == "Unknown Artist":
-            await status_message.edit_text("❌ не удалось распознать трек.")
+            # В группах не отправляем сообщение об ошибке
+            if is_group:
+                await status_message.delete()
+            else:
+                await status_message.edit_text("❌ не удалось распознать трек.")
             if original_media_path and os.path.exists(original_media_path):
                 os.remove(original_media_path)
             temp_dir_obj.cleanup()
@@ -324,7 +353,11 @@ async def handle_media_recognition(message: types.Message):
                 break
 
         if not first_valid_result:
-            await status_message.edit_text(f"❌ не нашлось подходящего трека для скачивания ({rec_artist} - {rec_title}).")
+            # В группах не отправляем сообщение об ошибке
+            if is_group:
+                await status_message.delete()
+            else:
+                await status_message.edit_text(f"❌ не нашлось подходящего трека для скачивания ({rec_artist} - {rec_title}).")
             if original_media_path and os.path.exists(original_media_path):
                 os.remove(original_media_path)
             temp_dir_obj.cleanup()
@@ -332,7 +365,12 @@ async def handle_media_recognition(message: types.Message):
 
         download_url = first_valid_result['url']
         logger.info(f"Found track to download: {first_valid_result['title']} from {download_url}")
-        await status_message.edit_text(f"⏳ скачиваю трек: {rec_artist} - {rec_title}...")
+        
+        # В группах сокращаем сообщение
+        if is_group:
+            await status_message.edit_text(f"⏳ скачиваю трек...")
+        else:
+            await status_message.edit_text(f"⏳ скачиваю трек: {rec_artist} - {rec_title}...")
 
         # 4. Download the first result
         loop = asyncio.get_running_loop()
@@ -382,7 +420,12 @@ async def handle_media_recognition(message: types.Message):
                  break # Use the first found lyrics
 
         # 7. Send Audio and Lyrics
-        await status_message.edit_text("📤 отправляю трек...")
+        # В группах сокращаем сообщение
+        if is_group:
+            await status_message.edit_text("📤 отправляю...")
+        else:
+            await status_message.edit_text("📤 отправляю трек...")
+            
         audio_msg = await bot.send_audio(
             chat_id,
             FSInputFile(downloaded_track_path),
@@ -406,10 +449,16 @@ async def handle_media_recognition(message: types.Message):
     except Exception as e:
         logger.error(f"Error in handle_media_recognition: {e}", exc_info=True)
         try:
-            await status_message.edit_text(f"❌ Ошибка обработки: {e}")
+            # В группах не показываем ошибку
+            if is_group:
+                await status_message.delete()
+            else:
+                await status_message.edit_text(f"❌ Ошибка обработки: {e}")
         except Exception: # Handle case where status message might already be deleted or inaccessible
             logger.warning("Could not edit status message during error handling.")
-            await message.reply(f"❌ Ошибка обработки: {e}") # Send a new message if status edit fails
+            # Только в личных чатах отправляем новое сообщение
+            if not is_group:
+                await message.reply(f"❌ Ошибка обработки: {e}") # Send a new message if status edit fails
 
     finally:
         # Cleanup temporary files and directory
@@ -479,6 +528,7 @@ async def handle_text(message: types.Message):
 
 async def handle_url_download(message: types.Message, url: str):
     logger.info(f"User {message.from_user.username} download_url: {url}")
+    is_group = message.chat.type in ('group', 'supergroup')
     # Notify admin
     await bot.send_message(
         ADMIN_ID,
@@ -486,7 +536,13 @@ async def handle_url_download(message: types.Message, url: str):
         parse_mode="HTML"
     )
     reply = message.reply if message.chat.type!='private' else message.answer
-    status = await reply(f"⏳ пытаюсь скачать медиа по ссылке {url[:50]}...", disable_web_page_preview=True)
+    
+    # В группах делаем более краткое сообщение
+    if is_group:
+        status = await reply("⏳ скачиваю...", disable_web_page_preview=True)
+    else:
+        status = await reply(f"⏳ пытаюсь скачать медиа по ссылке {url[:50]}...", disable_web_page_preview=True)
+    
     await download_media_from_url(url, message, status)
 
 async def handle_group_search(message: types.Message, query: str):
@@ -500,16 +556,19 @@ async def handle_group_search(message: types.Message, query: str):
     status = await message.reply("🔍 ищу музыку...")
     sid = str(uuid.uuid4())
     try:
-        maxr=MAX_TRACKS//2
-        yt,sc = await asyncio.gather(search_youtube(query,maxr),search_soundcloud(query,maxr))
-        combined=[]
-        for t in sc: combined.append({**t,'source':'soundcloud'})
-        for t in yt: combined.append({**t,'source':'youtube'})
+        # Используем GROUP_MAX_TRACKS для групповых чатов
+        maxr = GROUP_MAX_TRACKS // 2
+        yt, sc = await asyncio.gather(search_youtube(query, maxr), search_soundcloud(query, maxr))
+        combined = []
+        for t in sc: combined.append({**t, 'source': 'soundcloud'})
+        for t in yt: combined.append({**t, 'source': 'youtube'})
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
             return
-        search_results[sid]=combined
-        kb=create_tracks_keyboard(combined,0,sid)
+        search_results[sid] = combined
+        # Передаем флаг is_group=True
+        kb = create_tracks_keyboard(combined, 0, sid, is_group=True)
+        # Сокращаем текст сообщения для группы
         await bot.edit_message_text(f"🎵 найдено {len(combined)}", chat_id=status.chat.id, message_id=status.message_id, reply_markup=kb)
     except Exception as e:
         await bot.edit_message_text(f"❌ ошибка: {e}", chat_id=status.chat.id, message_id=status.message_id) 
