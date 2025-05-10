@@ -55,11 +55,8 @@ async def search_soundcloud(query, max_results=50):
             'extract_flat': True,
         }
         with yt_dlp.YoutubeDL(search_opts) as ydl:
-            print(f"[SoundCloud Search Debug] Querying: scsearch{max_results}:{query}")
             info = ydl.extract_info(f"scsearch{max_results}:{query}", download=False)
-            print(f"[SoundCloud Search Debug] Raw info: {info}")
             if not info or 'entries' not in info:
-                print("[SoundCloud Search Debug] No entries found.")
                 return []
 
             results = []
@@ -68,7 +65,6 @@ async def search_soundcloud(query, max_results=50):
                     continue
                 duration = entry.get('duration', 0)
                 if not duration or not (MIN_SONG_DURATION <= duration <= MAX_SONG_DURATION):
-                    print(f"[SoundCloud Search Debug] Skipping track due to duration: {duration}")
                     continue
                 raw_title = entry.get('title', 'Unknown Title')
                 if ' - ' in raw_title:
@@ -89,7 +85,6 @@ async def search_soundcloud(query, max_results=50):
                     'duration': duration,
                     'source': 'soundcloud',
                 })
-            print(f"[SoundCloud Search Debug] Found {len(results)} valid entries.")
             return results
     except Exception as e:
         print(f"An error occurred during SoundCloud search: {e}")
