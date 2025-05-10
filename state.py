@@ -9,4 +9,5 @@ from collections import defaultdict
 download_tasks = defaultdict(dict)
 search_results = {}
 download_queues = defaultdict(list)
-playlist_downloads = {} 
+playlist_downloads = {}
+admin_logging_enabled = True  # Флаг для включения/выключения логирования и отправки сообщений админу 

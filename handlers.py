@@ -15,24 +15,22 @@ from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
 from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
-from state import search_results, download_tasks, download_queues, playlist_downloads
+from state import search_results, download_tasks, download_queues, playlist_downloads, admin_logging_enabled
 from search import search_youtube, search_soundcloud
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track, _blocking_download_and_convert
 from media_downloader import download_media_from_url
 from download_queue import process_download_queue
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
-from utils import set_mp3_metadata
+from utils import set_mp3_metadata, send_to_admin
 
 logger = logging.getLogger(__name__)
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Notify admin about start action
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /start',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /start'
     )
     await message.answer(
         "🐈‍⬛ приветик я\n\n"
@@ -51,10 +49,8 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     # Notify admin about help action
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /help',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /help'
     )
     help_text = """*как пользоваться ботом* 
 
@@ -80,10 +76,8 @@ async def cmd_search(message: types.Message):
     query = " ".join(message.text.split()[1:])
     logger.info(f"User {message.from_user.username} search: {query}")
     # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск: {query}',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск: {query}'
     )
     
     # Проверяем тип чата
@@ -123,10 +117,8 @@ async def cmd_search(message: types.Message):
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
     # Notify admin about cancel action
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /cancel',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /cancel'
     )
     user_id = message.from_user.id
     cancelled_tasks = 0
@@ -183,10 +175,8 @@ async def process_download_callback(callback: types.CallbackQuery):
         # Определяем тип чата
         is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
-        await bot.send_message(
-            ADMIN_ID,
-            f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ прямое скачивание: <a href="{data["url"]}">ссылка</a>',
-            parse_mode="HTML"
+        await send_to_admin(
+            f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ прямое скачивание: <a href="{data["url"]}">ссылка</a>'
         )
         if data['url'] in download_tasks.get(user, {}):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True); return
@@ -224,10 +214,8 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         # Определяем тип чата
         is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
-        await bot.send_message(
-            ADMIN_ID,
-            f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ скачивание трека: <a href="{data["url"]}">{data["title"]}</a>',
-            parse_mode="HTML"
+        await send_to_admin(
+            f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ скачивание трека: <a href="{data["url"]}">{data["title"]}</a>'
         )
         user = callback.from_user.id
         if data['url'] in download_tasks.get(user, {}) or any(item[0]['url']==data['url'] for item in download_queues.get(user, [])):
@@ -281,10 +269,8 @@ async def handle_media_recognition(message: types.Message):
 
     # Notify admin
     media_type = "voice" if message.voice else ("audio" if message.audio else "video note")
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={user_id}">{message.from_user.full_name}</a>\n➤ распознавание {media_type}',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={user_id}">{message.from_user.full_name}</a>\n➤ распознавание {media_type}'
     )
 
     status_message = await message.reply("⏳ обрабатываю файл...")
@@ -502,10 +488,8 @@ async def handle_text(message: types.Message):
         if message.text.strip().startswith(('http://','https://')):
             await handle_url_download(message,message.text.strip()); return
         # Notify admin about private search
-        await bot.send_message(
-            ADMIN_ID,
-            f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в личке: {message.text.strip()}',
-            parse_mode="HTML"
+        await send_to_admin(
+            f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в личке: {message.text.strip()}'
         )
         # treat as search
         searching = await message.answer("🔍 ищу музыку...")
@@ -530,10 +514,8 @@ async def handle_url_download(message: types.Message, url: str):
     logger.info(f"User {message.from_user.username} download_url: {url}")
     is_group = message.chat.type in ('group', 'supergroup')
     # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ загрузка по ссылке: <a href="{url}">ссылка</a>',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ загрузка по ссылке: <a href="{url}">ссылка</a>'
     )
     reply = message.reply if message.chat.type!='private' else message.answer
     
@@ -548,10 +530,8 @@ async def handle_url_download(message: types.Message, url: str):
 async def handle_group_search(message: types.Message, query: str):
     logger.info(f"User {message.from_user.username} group_search: {query}")
     # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в группе: {query}',
-        parse_mode="HTML"
+    await send_to_admin(
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в группе: {query}'
     )
     status = await message.reply("🔍 ищу музыку...")
     sid = str(uuid.uuid4())
@@ -572,3 +552,21 @@ async def handle_group_search(message: types.Message, query: str):
         await bot.edit_message_text(f"🎵 найдено {len(combined)}", chat_id=status.chat.id, message_id=status.message_id, reply_markup=kb)
     except Exception as e:
         await bot.edit_message_text(f"❌ ошибка: {e}", chat_id=status.chat.id, message_id=status.message_id) 
+
+# Добавляем команду для переключения логирования, доступную только для админа
+@dp.message(Command("toggle_logging"))
+async def cmd_toggle_logging(message: types.Message):
+    from config import ADMIN_ID
+    
+    # Проверяем, что запрос пришел от админа
+    if message.from_user.id != int(ADMIN_ID):
+        return  # Молча игнорируем команду от не-админа
+    
+    global admin_logging_enabled
+    admin_logging_enabled = not admin_logging_enabled
+    status = "включено" if admin_logging_enabled else "выключено"
+    
+    await message.answer(f"🔄 Логирование и отправка уведомлений админу: {status}")
+    
+    # Добавляем запись в лог о смене состояния
+    logger.info(f"Admin toggled logging to: {status}") 
