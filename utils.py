@@ -1,10 +1,6 @@
 # utils.py
 # Utility functions for title/artist extraction and MP3 metadata
 
-import state  # Импортируем модуль целиком
-from bot_instance import bot
-from config import ADMIN_ID
-
 def extract_title_and_artist(title):
     """Улучшенное извлечение названия трека и исполнителя"""
     prefixes = ['Official Video', 'Official Music Video', 'Official Audio', 'Lyric Video', 'Lyrics', 'Topic']
@@ -45,23 +41,3 @@ def set_mp3_metadata(file_path, title, artist):
     except Exception as e:
         print(f"ошибка при установке метаданных: {e}")
         return False 
-
-async def send_to_admin(message_text, parse_mode="HTML"):
-    """
-    Отправляет сообщение админу, только если логирование включено
-    
-    Args:
-        message_text (str): Текст сообщения
-        parse_mode (str): Режим форматирования текста
-    """
-    if state.admin_logging_enabled:
-        try:
-            await bot.send_message(
-                ADMIN_ID,
-                message_text,
-                parse_mode=parse_mode
-            )
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Ошибка отправки сообщения админу: {e}") 
