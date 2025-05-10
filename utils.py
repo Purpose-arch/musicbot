@@ -54,7 +54,8 @@ async def send_to_admin(message_text, parse_mode="HTML"):
         message_text (str): Текст сообщения
         parse_mode (str): Режим форматирования текста
     """
-    if admin_logging_enabled:
+    import state  # Импортируем модуль для доступа к актуальному значению
+    if state.admin_logging_enabled:
         try:
             await bot.send_message(
                 ADMIN_ID,

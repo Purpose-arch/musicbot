@@ -556,15 +556,14 @@ async def handle_group_search(message: types.Message, query: str):
 # Добавляем команду для переключения логирования, доступную только для админа
 @dp.message(Command("toggle_logging"))
 async def cmd_toggle_logging(message: types.Message):
-    from config import ADMIN_ID
-    
     # Проверяем, что запрос пришел от админа
     if message.from_user.id != int(ADMIN_ID):
         return  # Молча игнорируем команду от не-админа
     
-    global admin_logging_enabled
-    admin_logging_enabled = not admin_logging_enabled
-    status = "включено" if admin_logging_enabled else "выключено"
+    # Модифицируем значение переменной в модуле state
+    import state
+    state.admin_logging_enabled = not state.admin_logging_enabled
+    status = "включено" if state.admin_logging_enabled else "выключено"
     
     await message.answer(f"🔄 Логирование и отправка уведомлений админу: {status}")
     
