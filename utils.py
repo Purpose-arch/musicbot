@@ -1,7 +1,7 @@
 # utils.py
 # Utility functions for title/artist extraction and MP3 metadata
 
-from state import admin_logging_enabled
+import state  # Импортируем модуль целиком
 from bot_instance import bot
 from config import ADMIN_ID
 
@@ -54,7 +54,6 @@ async def send_to_admin(message_text, parse_mode="HTML"):
         message_text (str): Текст сообщения
         parse_mode (str): Режим форматирования текста
     """
-    import state  # Импортируем модуль для доступа к актуальному значению
     if state.admin_logging_enabled:
         try:
             await bot.send_message(

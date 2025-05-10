@@ -15,7 +15,8 @@ from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
 from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
-from state import search_results, download_tasks, download_queues, playlist_downloads, admin_logging_enabled
+from state import search_results, download_tasks, download_queues, playlist_downloads
+import state  # Импортируем модуль целиком для доступа к admin_logging_enabled
 from search import search_youtube, search_soundcloud
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track, _blocking_download_and_convert
@@ -560,10 +561,15 @@ async def cmd_toggle_logging(message: types.Message):
     if message.from_user.id != int(ADMIN_ID):
         return  # Молча игнорируем команду от не-админа
     
+    # Логируем начальное состояние
+    logger.info(f"Current logging state BEFORE toggle: {state.admin_logging_enabled}")
+    
     # Модифицируем значение переменной в модуле state
-    import state
     state.admin_logging_enabled = not state.admin_logging_enabled
     status = "включено" if state.admin_logging_enabled else "выключено"
+    
+    # Логируем новое состояние
+    logger.info(f"New logging state AFTER toggle: {state.admin_logging_enabled}")
     
     await message.answer(f"🔄 Логирование и отправка уведомлений админу: {status}")
     
