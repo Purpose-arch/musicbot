@@ -170,7 +170,11 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         ext = os.path.splitext(actual_downloaded_path)[1].lower()
         if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
             if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
-            await original_message.answer_audio(FSInputFile(actual_downloaded_path), caption=safe_title)
+            await original_message.answer_audio(
+                FSInputFile(actual_downloaded_path),
+                title=safe_title,
+                performer=performer or "Unknown Artist"
+            )
         elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
             await original_message.answer_photo(FSInputFile(actual_downloaded_path))
         elif ext in ['.mp4','.mkv','.webm','.mov','.avi']:
