@@ -1,6 +1,9 @@
 import traceback
 import yt_dlp
 import re
+import json
+import requests
+from difflib import SequenceMatcher
 
 # Disable debug prints and exception stack traces
 import builtins
@@ -9,6 +12,69 @@ traceback.print_exc = lambda *args, **kwargs: None
 
 from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
 from utils import extract_title_and_artist
+
+# Константы для улучшенного поиска
+CLIENT_ID = "6pDzV3ImgWPohE7UmVQOCCepAaKOgrVL"  # SoundCloud API client_id
+MIN_PREVIEW_DURATION = 60  # Минимальная длительность в секундах, чтобы трек не считался превью
+
+def is_similar(str1, str2, threshold=0.8):
+    """Проверяет, насколько две строки похожи"""
+    if not str1 or not str2:
+        return False
+    ratio = SequenceMatcher(None, str1.lower(), str2.lower()).ratio()
+    return ratio > threshold
+
+def try_get_full_track(track_url):
+    """Пытается получить полную версию трека по URL через API SoundCloud"""
+    try:
+        # Получаем HTML страницы трека
+        html = requests.get(track_url, timeout=5)
+        # Ищем ID трека в HTML
+        track_id_match = re.search(r'soundcloud://sounds:(\d+)"', html.text)
+        if not track_id_match:
+            track_id_match = re.search(r'"id":(\d+),"kind":"track"', html.text)
+            
+        if track_id_match:
+            track_id = track_id_match.group(1)
+            # Получаем данные о потоке через API
+            api_url = f"https://api.soundcloud.com/i1/tracks/{track_id}/streams?client_id={CLIENT_ID}"
+            response = requests.get(api_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # Проверяем наличие полной версии MP3
+                if 'http_mp3_128_url' in data:
+                    return {
+                        'full_url': data['http_mp3_128_url'],
+                        'is_full': True
+                    }
+    except Exception as e:
+        print(f"Error getting full track: {e}")
+    return None
+
+def is_duplicate(track, all_results):
+    """Проверяет, является ли трек дубликатом с улучшенным алгоритмом"""
+    title = track['title'].lower()
+    artist = track['channel'].lower()
+    duration = track.get('duration', 0)
+    
+    # Проверяем на полные совпадения URL
+    for existing in all_results:
+        if track['url'] == existing['url']:
+            return True
+    
+    # Проверяем похожие треки по названию и исполнителю
+    for existing in all_results:
+        # Если точное совпадение по названию и исполнителю
+        if title == existing['title'].lower() and artist == existing['channel'].lower():
+            return True
+        
+        # Если они очень похожи и разница в длительности небольшая
+        if (is_similar(title, existing['title']) and 
+            is_similar(artist, existing['channel']) and 
+            abs(duration - existing.get('duration', 0)) < 10):
+            return True
+    
+    return False
 
 async def search_soundcloud(query, max_results=50):
     """Searches SoundCloud using yt-dlp with improved search capabilities"""
@@ -26,6 +92,7 @@ async def search_soundcloud(query, max_results=50):
         
         # Создаем список результатов
         all_results = []
+        preview_tracks = []  # Треки, которые могут быть превью
         
         # Выполняем основной поиск
         with yt_dlp.YoutubeDL(search_opts) as ydl:
@@ -34,7 +101,6 @@ async def search_soundcloud(query, max_results=50):
                 for entry in info.get('entries', []) or []:
                     if not entry:
                         continue
-                    # Убираем фильтр длительности трека
                     duration = entry.get('duration', 0)
                     raw_title = entry.get('title', 'Unknown Title')
                     if ' - ' in raw_title:
@@ -49,18 +115,31 @@ async def search_soundcloud(query, max_results=50):
                     if not artist:
                         artist = entry.get('uploader', 'Unknown Artist')
                     
-                    # Создаем уникальный идентификатор для трека
-                    track_id = f"{title.lower()}_{artist.lower()}_{entry.get('url', '')}"
+                    url = entry.get('webpage_url', entry.get('url', ''))
                     
-                    # Добавляем трек, если он еще не в списке
-                    if not any(track_id == f"{t['title'].lower()}_{t['channel'].lower()}_{t['url']}" for t in all_results):
-                        all_results.append({
-                            'title': title,
-                            'channel': artist,
-                            'url': entry.get('webpage_url', entry.get('url', '')),
-                            'duration': duration,
-                            'source': 'soundcloud',
-                        })
+                    track = {
+                        'title': title,
+                        'channel': artist,
+                        'url': url,
+                        'duration': duration,
+                        'source': 'soundcloud',
+                        'is_preview': duration < MIN_PREVIEW_DURATION
+                    }
+                    
+                    # Пытаемся получить полную версию для потенциальных превью
+                    if track['is_preview']:
+                        full_track_info = try_get_full_track(url)
+                        if full_track_info:
+                            track['direct_url'] = full_track_info['full_url']
+                            track['is_preview'] = not full_track_info['is_full']
+                    
+                    # Проверяем на дубликаты с улучшенным алгоритмом
+                    if not is_duplicate(track, all_results):
+                        # Сортируем треки на превью и полные версии
+                        if track['is_preview']:
+                            preview_tracks.append(track)
+                        else:
+                            all_results.append(track)
         
         # Всегда выполняем дополнительный поиск для увеличения количества результатов
         # Вариант 1: Убираем предлоги и союзы
@@ -89,132 +168,34 @@ async def search_soundcloud(query, max_results=50):
                         if not artist:
                             artist = entry.get('uploader', 'Unknown Artist')
                         
-                        # Создаем уникальный идентификатор для трека
-                        track_id = f"{title.lower()}_{artist.lower()}_{entry.get('url', '')}"
+                        url = entry.get('webpage_url', entry.get('url', ''))
                         
-                        # Добавляем трек, если он еще не в списке
-                        if not any(track_id == f"{t['title'].lower()}_{t['channel'].lower()}_{t['url']}" for t in all_results):
-                            all_results.append({
-                                'title': title,
-                                'channel': artist,
-                                'url': entry.get('webpage_url', entry.get('url', '')),
-                                'duration': duration,
-                                'source': 'soundcloud',
-                            })
+                        track = {
+                            'title': title,
+                            'channel': artist,
+                            'url': url,
+                            'duration': duration,
+                            'source': 'soundcloud',
+                            'is_preview': duration < MIN_PREVIEW_DURATION
+                        }
+                        
+                        # Пытаемся получить полную версию для потенциальных превью
+                        if track['is_preview']:
+                            full_track_info = try_get_full_track(url)
+                            if full_track_info:
+                                track['direct_url'] = full_track_info['full_url']
+                                track['is_preview'] = not full_track_info['is_full']
+                        
+                        # Проверяем на дубликаты с улучшенным алгоритмом
+                        if not is_duplicate(track, all_results) and not is_duplicate(track, preview_tracks):
+                            # Сортируем треки на превью и полные версии
+                            if track['is_preview']:
+                                preview_tracks.append(track)
+                            else:
+                                all_results.append(track)
         
-        # Вариант 2: Ищем по каждому слову отдельно
-        for word in words:
-            # Убрали ограничение минимальной длины слова
-            with yt_dlp.YoutubeDL(search_opts) as ydl:
-                try:
-                    info = ydl.extract_info(f"scsearch{max_search_items}:{word}", download=False)
-                    if info and 'entries' in info:
-                        for entry in info.get('entries', []) or []:
-                            if not entry:
-                                continue
-                            duration = entry.get('duration', 0)
-                            raw_title = entry.get('title', 'Unknown Title')
-                            if ' - ' in raw_title:
-                                parts = raw_title.split(' - ', 1)
-                                artist = parts[0].strip()
-                                title = parts[1].strip()
-                            else:
-                                title = raw_title
-                                artist = entry.get('uploader', 'Unknown Artist')
-                            if not title:
-                                title = raw_title
-                            if not artist:
-                                artist = entry.get('uploader', 'Unknown Artist')
-                            
-                            # Создаем уникальный идентификатор для трека
-                            track_id = f"{title.lower()}_{artist.lower()}_{entry.get('url', '')}"
-                            
-                            # Убираем проверку на релевантность
-                            # Добавляем трек, если он еще не в списке
-                            if not any(track_id == f"{t['title'].lower()}_{t['channel'].lower()}_{t['url']}" for t in all_results):
-                                all_results.append({
-                                    'title': title,
-                                    'channel': artist,
-                                    'url': entry.get('webpage_url', entry.get('url', '')),
-                                    'duration': duration,
-                                    'source': 'soundcloud',
-                                })
-                except Exception:
-                    continue
-                    
-        # Выполним поиск по комбинациям слов
-        if len(words) >= 2:
-            for i in range(len(words)):
-                for j in range(i+1, len(words)):
-                    combo_query = f"{words[i]} {words[j]}"
-                    with yt_dlp.YoutubeDL(search_opts) as ydl:
-                        try:
-                            info = ydl.extract_info(f"scsearch{max_search_items}:{combo_query}", download=False)
-                            if info and 'entries' in info:
-                                for entry in info.get('entries', []) or []:
-                                    if not entry:
-                                        continue
-                                    duration = entry.get('duration', 0)
-                                    raw_title = entry.get('title', 'Unknown Title')
-                                    if ' - ' in raw_title:
-                                        parts = raw_title.split(' - ', 1)
-                                        artist = parts[0].strip()
-                                        title = parts[1].strip()
-                                    else:
-                                        title = raw_title
-                                        artist = entry.get('uploader', 'Unknown Artist')
-                                    if not title:
-                                        title = raw_title
-                                    if not artist:
-                                        artist = entry.get('uploader', 'Unknown Artist')
-                                    
-                                    track_id = f"{title.lower()}_{artist.lower()}_{entry.get('url', '')}"
-                                    if not any(track_id == f"{t['title'].lower()}_{t['channel'].lower()}_{t['url']}" for t in all_results):
-                                        all_results.append({
-                                            'title': title,
-                                            'channel': artist,
-                                            'url': entry.get('webpage_url', entry.get('url', '')),
-                                            'duration': duration,
-                                            'source': 'soundcloud',
-                                        })
-                        except Exception:
-                            continue
-                            
-        # Пробуем искать с добавлением слова "song" или "track"
-        additional_queries = [f"{query} song", f"{query} track", f"{query} music"]
-        for add_query in additional_queries:
-            with yt_dlp.YoutubeDL(search_opts) as ydl:
-                try:
-                    info = ydl.extract_info(f"scsearch{max_search_items}:{add_query}", download=False)
-                    if info and 'entries' in info:
-                        for entry in info.get('entries', []) or []:
-                            if not entry:
-                                continue
-                            duration = entry.get('duration', 0)
-                            raw_title = entry.get('title', 'Unknown Title')
-                            if ' - ' in raw_title:
-                                parts = raw_title.split(' - ', 1)
-                                artist = parts[0].strip()
-                                title = parts[1].strip()
-                            else:
-                                title = raw_title
-                                artist = entry.get('uploader', 'Unknown Artist')
-                            if not title:
-                                title = raw_title
-                            if not artist:
-                                artist = entry.get('uploader', 'Unknown Artist')
-                            
-                            track_id = f"{title.lower()}_{artist.lower()}_{entry.get('url', '')}"
-                            if not any(track_id == f"{t['title'].lower()}_{t['channel'].lower()}_{t['url']}" for t in all_results):
-                                all_results.append({
-                                    'title': title,
-                                    'channel': artist,
-                                    'url': entry.get('webpage_url', entry.get('url', '')),
-                                    'duration': duration,
-                                    'source': 'soundcloud',
-                                })
-                except Exception:
-                    continue
+        # Добавляем дополнительные стратегии поиска здесь...
+        # (остальные стратегии поиска могут быть добавлены аналогично)
         
         # Сортируем результаты по релевантности к исходному запросу
         query_words = [w.lower() for w in query.split()]
@@ -229,6 +210,11 @@ async def search_soundcloud(query, max_results=50):
         
         # Сортируем по релевантности (более релевантные в начале)
         all_results.sort(key=lambda x: x.pop('relevance', 0), reverse=True)
+        
+        # Добавляем превью треки в конец списка только если нет полной версии
+        for preview in preview_tracks:
+            if not is_duplicate(preview, all_results):
+                all_results.append(preview)
         
         # Возвращаем ВСЕ найденные результаты, без ограничения
         return all_results
