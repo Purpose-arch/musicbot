@@ -44,6 +44,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     original_status_message_id = None
     chat_id_for_updates = None
     url = track_data.get('url', '')
+    source = track_data.get('source', '')
 
     # Determine message context
     if is_playlist_track:
@@ -92,6 +93,152 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         return
 
     try:
+        # FAST DOWNLOAD PATH FOR VK TRACKS
+        if source == 'vk' and 'track_obj' in track_data:
+            print(f"Using fast download path for VK track: {title} - {artist}")
+            temp_dir = tempfile.gettempdir()
+            safe_title = ''.join(c if c.isalnum() or c in ('.','_','-') else '_' for c in title).strip('_.-')[:100]
+            if not safe_title:
+                safe_title = f"audio_{uuid.uuid4()}"
+                
+            # Создаем уникальный путь для временного файла
+            if is_playlist_track:
+                base_temp_path = os.path.join(temp_dir, f"vk_pl_{playlist_download_id}_{safe_title}")
+            else:
+                task_uuid = str(uuid.uuid4())
+                base_temp_path = os.path.join(temp_dir, f"vk_single_{task_uuid}_{safe_title}")
+                
+            expected_mp3 = f"{base_temp_path}.mp3"
+            
+            # Чистим существующие файлы
+            if os.path.exists(expected_mp3):
+                try:
+                    os.remove(expected_mp3)
+                except Exception as e:
+                    print(f"Warning: Could not remove existing file {expected_mp3}: {e}")
+            
+            # Импортируем модуль vk_music для прямого скачивания
+            from vk_music import download_track as vk_download_track
+            
+            # Выполняем прямое скачивание трека из VK
+            # Это блокирующая операция, выполняем ее в executor
+            download_dir = os.path.dirname(expected_mp3)
+            track_obj = track_data.get('track_obj')
+            
+            # Статус для пользователя
+            if not is_playlist_track:
+                try:
+                    if original_status_message_id:
+                        if is_group:
+                            await bot.edit_message_text("⏳ мгновенная загрузка из VK...", 
+                                                     chat_id=chat_id_for_updates, 
+                                                     message_id=original_status_message_id)
+                        else:
+                            await bot.edit_message_text(f"⏳ мгновенная загрузка {title} - {artist} из VK...", 
+                                                     chat_id=chat_id_for_updates, 
+                                                     message_id=original_status_message_id)
+                except Exception as e:
+                    print(f"Warning: Could not update status message: {e}")
+            
+            # Выполняем скачивание в executor
+            try:
+                temp_path = await loop.run_in_executor(None, 
+                                                    lambda: vk_download_track(track_obj, download_dir))
+                
+                print(f"Fast download complete: {temp_path}")
+                
+                # Проверяем что файл существует и не пустой
+                if not os.path.exists(temp_path):
+                    raise Exception("Файл не был скачан")
+                
+                if os.path.getsize(temp_path) == 0:
+                    raise Exception("Скачанный файл пустой")
+                
+                # Валидируем MP3
+                audio_check = MP3(temp_path)
+                if not audio_check.info.length > 0:
+                    raise Exception("MP3 файл скачался, но похоже битый (нулевая длина)")
+                
+                # Успешное скачивание - обрабатываем трек
+                if is_playlist_track:
+                    entry = playlist_downloads.get(playlist_download_id)
+                    if entry:
+                        for t in entry['tracks']:
+                            if t['url']==url and t['status'] in ('pending','downloading'):
+                                t['status']='success'
+                                t['file_path']=temp_path
+                                break
+                        entry['completed_tracks']+=1
+                        if entry['completed_tracks'] < entry['total_tracks'] and entry['status_message_id']:
+                            try:
+                                text = f"⏳ загрузка плейлиста {entry['playlist_title']}: {entry['completed_tracks']}/{entry['total_tracks']}"
+                                await bot.edit_message_text(text, chat_id=entry['chat_id'], message_id=entry['status_message_id'])
+                            except: pass
+                        if entry['completed_tracks']>=entry['total_tracks']:
+                            asyncio.create_task(send_completed_playlist(playlist_download_id))
+                else:
+                    # Single track:
+                    if set_mp3_metadata(temp_path, title, artist):
+                        # Attempt Shazam recognition to refine title and artist
+                        try:
+                            result = await shazam.recognize(temp_path)
+                            track_info = result.get("track", {})
+                            rec_title = track_info.get("title") or track_info.get("heading")
+                            rec_artist = track_info.get("subtitle")
+                            if rec_title and rec_artist:
+                                title, artist = rec_title, rec_artist
+                        except Exception as e:
+                            print(f"Shazam recognition error: {e}")
+
+                        # Fetch lyrics in priority order
+                        lyrics = None
+                        for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
+                            try:
+                                lyrics = await fetch(artist, title)
+                            except Exception:
+                                lyrics = None
+                            if lyrics:
+                                break
+
+                        # Delete original status message if present
+                        if original_status_message_id:
+                            try: await bot.delete_message(chat_id_for_updates, original_status_message_id)
+                            except: pass
+
+                        ctx = callback_message or original_message_context
+                        if ctx:
+                            # В группах сокращаем сообщения
+                            if not is_group:
+                                snd = await ctx.answer("📤 отправляю трек")
+                            
+                            # Send audio and capture the message
+                            audio_msg = await bot.send_audio(
+                                chat_id_for_updates,
+                                FSInputFile(temp_path),
+                                title=title,
+                                performer=artist
+                            )
+                            
+                            # Delete the temporary status message только в личных чатах
+                            if not is_group and locals().get('snd'):
+                                await bot.delete_message(snd.chat.id, snd.message_id)
+                                
+                            # Send lyrics if found (даже в группах)
+                            if lyrics:
+                                await bot.send_message(
+                                    chat_id_for_updates,
+                                    f"<blockquote expandable>{lyrics}</blockquote>",
+                                    reply_to_message_id=audio_msg.message_id,
+                                    parse_mode="HTML"
+                                )
+                return
+                
+            except Exception as e:
+                print(f"Error during fast VK download: {e}")
+                # Если произошла ошибка при быстром скачивании, мы продолжим со стандартным методом
+                print("Falling back to standard download method")
+        
+        # STANDARD DOWNLOAD PATH FOR OTHER SOURCES
         # Prepare file paths
         safe_title = ''.join(c if c.isalnum() or c in ('.','_','-') else '_' for c in title).strip('_.-')[:100]
         if not safe_title:
