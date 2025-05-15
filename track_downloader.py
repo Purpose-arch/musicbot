@@ -43,6 +43,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     playlist_entry = None
     original_status_message_id = None
     chat_id_for_updates = None
+    url = track_data.get('url', '')
 
     # Determine message context
     if is_playlist_track:
@@ -53,7 +54,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         else:
             print(f"ERROR: download_track called with playlist_id {playlist_download_id} but entry not found!")
             if user_id in download_tasks:
-                download_tasks[user_id].pop(track_data.get('url', 'unknown_url'), None)
+                download_tasks[user_id].pop(url, None)
                 if not download_tasks[user_id]:
                     del download_tasks[user_id]
             return
@@ -67,14 +68,13 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     else:
         print(f"ERROR: download_track called for single track but missing message context!")
         if user_id in download_tasks:
-            download_tasks[user_id].pop(track_data.get('url', 'unknown_url'), None)
+            download_tasks[user_id].pop(url, None)
             if not download_tasks[user_id]:
                 del download_tasks[user_id]
         return
 
     title = track_data.get('title', 'Unknown Title')
     artist = track_data.get('channel', 'Unknown Artist')
-    url = track_data.get('url')
     
     # Определяем тип чата для уменьшения сообщений в группе
     is_group = False

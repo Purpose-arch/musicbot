@@ -9,42 +9,6 @@ traceback.print_exc = lambda *args, **kwargs: None
 from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
 from utils import extract_title_and_artist
 
-async def search_youtube(query, max_results=50):
-    """Searches YouTube for tracks matching query"""
-    try:
-        search_opts = {
-            **YDL_AUDIO_OPTS,
-            'default_search': 'ytsearch',
-            'max_downloads': max_results,
-            'extract_flat': True,
-        }
-        with yt_dlp.YoutubeDL(search_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch{max_results}:{query}", download=False)
-            if not info or 'entries' not in info:
-                return []
-
-            results = []
-            for entry in info['entries']:
-                if not entry:
-                    continue
-                duration = entry.get('duration', 0)
-                if not duration or not (MIN_SONG_DURATION <= duration <= MAX_SONG_DURATION):
-                    continue
-                title, artist = extract_title_and_artist(entry.get('title', 'Unknown Title'))
-                if artist == "Unknown Artist":
-                    artist = entry.get('uploader', 'Unknown Artist')
-                results.append({
-                    'title': title,
-                    'channel': artist,
-                    'url': entry.get('url', ''),
-                    'duration': duration,
-                })
-            return results
-    except Exception as e:
-        print(f"An error occurred during YouTube search: {e}")
-        traceback.print_exc()
-        return []
-
 async def search_soundcloud(query, max_results=50):
     """Searches SoundCloud using yt-dlp"""
     try:
@@ -89,4 +53,4 @@ async def search_soundcloud(query, max_results=50):
     except Exception as e:
         print(f"An error occurred during SoundCloud search: {e}")
         traceback.print_exc()
-        return [] 
+        return []

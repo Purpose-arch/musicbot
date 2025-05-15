@@ -74,7 +74,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             for idx, e in enumerate(entries):
                 if not e:
                     continue
-                entry_url = e.get('webpage_url') or (f"https://www.youtube.com/watch?v={e.get('id')}" if e.get('id') else None)
+                entry_url = e.get('webpage_url') or e.get('url')
                 title = e.get('title')
                 artist = e.get('uploader', 'Unknown Artist')
                 if not entry_url or not title:

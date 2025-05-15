@@ -16,7 +16,7 @@ from aiogram.filters import Command
 from bot_instance import dp, bot, ADMIN_ID
 from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
 from state import search_results, download_tasks, download_queues, playlist_downloads
-from search import search_youtube, search_soundcloud
+from search import search_soundcloud
 from keyboard import create_tracks_keyboard
 from track_downloader import download_track, _blocking_download_and_convert
 from media_downloader import download_media_from_url
@@ -42,7 +42,7 @@ async def cmd_start(message: types.Message):
         "✅ юный\n"
         "✅ новобранец\n\n"
         "🎵 ищу музыку по названию\n"
-        "🔗 скачиваю треки и плейлисты по ссылке (youtube soundcloud), а также видео (тикток)\n\n"
+        "🔗 скачиваю треки и плейлисты по ссылке (soundcloud), а также видео (тикток)\n\n"
         "👥 также можно добавить меня в группу и использовать команду\n"
         "«музыка/найти/трек/песня (запрос)»\n"
         "либо отправить ссылку там"
@@ -59,10 +59,10 @@ async def cmd_help(message: types.Message):
     help_text = """*как пользоваться ботом* 
 
 1️⃣ **поиск музыки** 
-просто напиши название трека или исполнителя я поищу на soundcloud и youtube и покажу список
+просто напиши название трека или исполнителя я поищу на soundcloud и покажу список
 
 2️⃣ **скачивание по ссылке** 
-отправь мне прямую ссылку на трек или плейлист (youtube soundcloud и др) я попытаюсь скачать
+отправь мне прямую ссылку на трек или плейлист soundcloud я попытаюсь скачать
 (плейлисты отправляются целиком после загрузки всех треков)
 
 *команды*
@@ -92,21 +92,17 @@ async def cmd_search(message: types.Message):
     searching_message = await message.answer("🔍 ищу музыку...")
     search_id = str(uuid.uuid4())
     # Используем разные лимиты в зависимости от типа чата
-    max_results = GROUP_MAX_TRACKS // 2 if is_group else MAX_TRACKS // 2
+    max_results = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
     
-    yt, sc = await asyncio.gather(
-        search_youtube(query, max_results),
-        search_soundcloud(query, max_results),
-    )
+    sc = await search_soundcloud(query, max_results)
+    
     combined = []
     for t in sc:
         if 'source' not in t: t['source'] = 'soundcloud'
         combined.append(t)
-    for t in yt:
-        if 'source' not in t: t['source'] = 'youtube'
-        combined.append(t)
+    
     if not combined:
-        await message.answer("❌ чет ничего не нашлось ни там ни там попробуй другой запрос")
+        await message.answer("❌ чет ничего не нашлось, попробуй другой запрос")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
         return
     search_results[search_id] = combined
@@ -291,6 +287,7 @@ async def handle_media_recognition(message: types.Message):
 
     original_media_path = None
     downloaded_track_path = None
+    converted_media_path = None
     temp_dir = None
 
     try:
@@ -363,13 +360,11 @@ async def handle_media_recognition(message: types.Message):
 
         # 3. Search for the track
         search_query = f"{rec_artist} {rec_title}"
-        max_results_per_source = 5 # Search a few results per source
-        yt_results, sc_results = await asyncio.gather(
-            search_youtube(search_query, max_results_per_source),
-            search_soundcloud(search_query, max_results_per_source),
-        )
-        # Prioritize SoundCloud results, then YouTube
-        search_results_list = sc_results + yt_results
+        max_results = 10 # Увеличил количество результатов с 5 до 10 для более точного поиска
+        sc_results = await search_soundcloud(search_query, max_results)
+        
+        # Теперь поиск только в SoundCloud
+        search_results_list = sc_results
 
         first_valid_result = None
         for res in search_results_list:
@@ -539,16 +534,16 @@ async def handle_text(message: types.Message):
         searching = await message.answer("🔍 ищу музыку...")
         sid = str(uuid.uuid4())
         try:
-            maxr=MAX_TRACKS//2
-            yt,sc = await asyncio.gather(search_youtube(message.text,maxr),search_soundcloud(message.text,maxr))
-            combined=[]
-            for t in sc: combined.append({**t,'source':'soundcloud'})
-            for t in yt: combined.append({**t,'source':'youtube'})
+            maxr = MAX_TRACKS
+            sc = await search_soundcloud(message.text, maxr)
+            combined = []
+            for t in sc: combined.append({**t, 'source': 'soundcloud'})
+            
             if not combined:
                 await bot.edit_message_text("❌ ничего не нашел", chat_id=searching.chat.id, message_id=searching.message_id)
                 return
-            search_results[sid]=combined
-            kb=create_tracks_keyboard(combined,0,sid)
+            search_results[sid] = combined
+            kb = create_tracks_keyboard(combined, 0, sid)
             await bot.edit_message_text(f"🎵 найдено {len(combined)}", chat_id=searching.chat.id, message_id=searching.message_id, reply_markup=kb)
         except Exception as e:
             await bot.edit_message_text(f"❌ ошибка при поиске: {e}", chat_id=searching.chat.id, message_id=searching.message_id)
@@ -585,11 +580,11 @@ async def handle_group_search(message: types.Message, query: str):
     sid = str(uuid.uuid4())
     try:
         # Используем GROUP_MAX_TRACKS для групповых чатов
-        maxr = GROUP_MAX_TRACKS // 2
-        yt, sc = await asyncio.gather(search_youtube(query, maxr), search_soundcloud(query, maxr))
+        maxr = GROUP_MAX_TRACKS
+        sc = await search_soundcloud(query, maxr)
         combined = []
         for t in sc: combined.append({**t, 'source': 'soundcloud'})
-        for t in yt: combined.append({**t, 'source': 'youtube'})
+        
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
             return
