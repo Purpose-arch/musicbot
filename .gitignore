@@ -28,7 +28,8 @@ downloads/
 temp/
 *.mp3
 
-
+# Logs
+*.log
 
 # Byte-compiled / optimized / DLL files
 *.so
