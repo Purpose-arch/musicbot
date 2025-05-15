@@ -6,9 +6,9 @@ import builtins
 print = lambda *args, **kwargs: None
 traceback.print_exc = lambda *args, **kwargs: None
 
-from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION, VK_ENABLED
+from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
 from utils import extract_title_and_artist
-from vk_music import search_vk_tracks  # Импортируем функцию поиска VK
+from vk_music import get_vk_service
 
 async def search_soundcloud(query, max_results=50):
     """Searches SoundCloud using yt-dlp"""
@@ -54,35 +54,29 @@ async def search_soundcloud(query, max_results=50):
     except Exception as e:
         print(f"An error occurred during SoundCloud search: {e}")
         traceback.print_exc()
-        return []
+        return [] 
 
-async def search_music(query, max_results=50, source=None):
-    """Выполняет поиск музыки во всех доступных источниках или в указанном источнике"""
-    results = []
-    
-    # Поиск в SoundCloud по умолчанию, если не указан другой источник
-    if source is None or source == 'soundcloud':
-        soundcloud_results = await search_soundcloud(query, max_results)
-        for track in soundcloud_results:
-            if 'source' not in track:
-                track['source'] = 'soundcloud'
-            results.append(track)
-    
-    # Поиск в ВКонтакте только если явно указан или не указан конкретный источник
-    # И только если включен (VK_ENABLED == True)
-    if (source is None or source == 'vk') and VK_ENABLED:
-        try:
-            print(f"Searching VK Music for: {query}")
-            vk_results = await search_vk_tracks(query, max_results)
-            if vk_results:
-                print(f"Found {len(vk_results)} tracks in VK Music")
-                results.extend(vk_results)
-            else:
-                print("No results found in VK Music")
-        except Exception as e:
-            print(f"An error occurred during VK search: {e}")
-            traceback.print_exc()
-    elif source == 'vk' and not VK_ENABLED:
-        print("VK Music search requested but VK is disabled (no credentials)")
-    
-    return results 
+async def search_vk(query: str, max_results: int = 50):
+    """Searches VK for tracks using vkpymusic, returns list of dicts (title, channel, url, duration, source)."""
+    try:
+        service = get_vk_service()
+        tracks = service.search_songs_by_text(query, count=max_results)
+        results = []
+        for track in tracks:
+            artist = getattr(track, 'artist', 'Unknown Artist')
+            title = getattr(track, 'title', 'Unknown Title')
+            duration = getattr(track, 'duration', 0)
+            url = getattr(track, 'url', None) or getattr(track, 'download_url', None) or ''
+            if not url:
+                continue
+            results.append({
+                'title': title,
+                'channel': artist,
+                'url': url,
+                'duration': duration,
+                'source': 'vk',
+            })
+        return results
+    except Exception as e:
+        print(f"An error occurred during VK search: {e}")
+        return []
