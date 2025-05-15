@@ -316,8 +316,33 @@ async def handle_media_recognition(message: types.Message):
         logger.info(f"Media downloaded to: {original_media_path}")
         await status_message.edit_text("🔎 распознаю трек...")
 
+        # Конвертирование аудиофайла в чистый mp3 формат для лучшего распознавания
+        converted_media_path = os.path.join(temp_dir, f"converted_{media_file.file_unique_id}.mp3")
+        try:
+            # Используем ffmpeg для конвертации в mp3 с нормализацией
+            proc = await asyncio.create_subprocess_exec(
+                'ffmpeg', '-y', '-i', original_media_path,
+                '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11', # нормализация громкости
+                '-ar', '44100', '-ac', '2', # стандартный семплрейт и стерео
+                '-codec:a', 'libmp3lame', '-q:a', '2', # высокое качество mp3
+                converted_media_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            
+            if os.path.exists(converted_media_path) and os.path.getsize(converted_media_path) > 0:
+                logger.info(f"Successfully converted media to: {converted_media_path}")
+                recognition_path = converted_media_path
+            else:
+                logger.warning("Conversion failed, using original file for recognition")
+                recognition_path = original_media_path
+        except Exception as e:
+            logger.error(f"Error converting media file: {e}")
+            recognition_path = original_media_path
+
         # 2. Recognize using Shazam
-        result = await shazam.recognize(original_media_path)
+        result = await shazam.recognize(recognition_path)
         track_info = result.get("track", {})
         rec_title = track_info.get("title") or track_info.get("heading", "Unknown Title")
         rec_artist = track_info.get("subtitle", "Unknown Artist")
@@ -468,6 +493,9 @@ async def handle_media_recognition(message: types.Message):
         if downloaded_track_path and os.path.exists(downloaded_track_path):
             try: os.remove(downloaded_track_path)
             except Exception as e: logger.warning(f"Could not remove downloaded track file {downloaded_track_path}: {e}")
+        if converted_media_path and os.path.exists(converted_media_path):
+            try: os.remove(converted_media_path)
+            except Exception as e: logger.warning(f"Could not remove converted media file {converted_media_path}: {e}")
         if temp_dir and os.path.exists(temp_dir):
              try: temp_dir_obj.cleanup()
              except Exception as e: logger.warning(f"Could not cleanup temporary directory {temp_dir}: {e}")
