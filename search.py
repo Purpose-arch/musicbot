@@ -6,7 +6,7 @@ import builtins
 print = lambda *args, **kwargs: None
 traceback.print_exc = lambda *args, **kwargs: None
 
-from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
+from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION, VK_ENABLED
 from utils import extract_title_and_artist
 from vk_music import search_vk_tracks  # Импортируем функцию поиска VK
 
@@ -69,12 +69,20 @@ async def search_music(query, max_results=50, source=None):
             results.append(track)
     
     # Поиск в ВКонтакте только если явно указан или не указан конкретный источник
-    if source is None or source == 'vk':
+    # И только если включен (VK_ENABLED == True)
+    if (source is None or source == 'vk') and VK_ENABLED:
         try:
+            print(f"Searching VK Music for: {query}")
             vk_results = await search_vk_tracks(query, max_results)
-            results.extend(vk_results)
+            if vk_results:
+                print(f"Found {len(vk_results)} tracks in VK Music")
+                results.extend(vk_results)
+            else:
+                print("No results found in VK Music")
         except Exception as e:
             print(f"An error occurred during VK search: {e}")
             traceback.print_exc()
+    elif source == 'vk' and not VK_ENABLED:
+        print("VK Music search requested but VK is disabled (no credentials)")
     
     return results 

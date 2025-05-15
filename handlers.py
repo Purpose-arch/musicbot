@@ -14,7 +14,7 @@ from aiogram import F, types
 from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
-from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
+from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS, VK_ENABLED
 from state import search_results, download_tasks, download_queues, playlist_downloads
 from search import search_soundcloud, search_music
 from keyboard import create_tracks_keyboard
@@ -606,6 +606,11 @@ async def handle_group_search(message: types.Message, query: str):
 @dp.message(Command("vksearch"))
 async def cmd_vk_search(message: types.Message):
     """Отдельная команда для поиска только в ВКонтакте (для отладки)"""
+    # Проверяем, включен ли VK
+    if not VK_ENABLED:
+        await message.answer("❌ Поиск в ВКонтакте отключен. Проверьте, что переменные окружения VK_LOGIN и VK_PASSWORD установлены.")
+        return
+        
     if len(message.text.split()) < 2:
         await message.answer("❌ напиши что-нибудь после /vksearch плиз\nнапример /vksearch coldplay yellow")
         return

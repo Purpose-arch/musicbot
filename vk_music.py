@@ -1,7 +1,8 @@
 import os
 import logging
 import traceback  # Добавляем для печати стека ошибок
-from vkpymusic import TokenReceiver, Service
+import json
+from vkpymusic import TokenReceiver, Service, Account
 
 # Настраиваем логирование
 logger = logging.getLogger(__name__)
@@ -14,48 +15,133 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
+def save_token_to_json(token, filename="vk_token.json"):
+    """Сохраняет токен ВК в JSON файл"""
+    try:
+        data = {"token": token}
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        logger.info(f"VK Music: Токен сохранен в файл {filename}")
+        return True
+    except Exception as e:
+        logger.error(f"VK Music: Ошибка при сохранении токена в файл: {e}")
+        return False
+
+def load_token_from_json(filename="vk_token.json"):
+    """Загружает токен ВК из JSON файла"""
+    try:
+        if not os.path.exists(filename):
+            logger.warning(f"VK Music: Файл с токеном {filename} не найден")
+            return None
+        
+        with open(filename, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        
+        token = data.get("token")
+        if not token:
+            logger.warning("VK Music: В файле отсутствует токен")
+            return None
+        
+        logger.info(f"VK Music: Токен успешно загружен из файла {filename}")
+        return token
+    except Exception as e:
+        logger.error(f"VK Music: Ошибка при загрузке токена из файла: {e}")
+        return None
+
 def init_vk_service():
     """Инициализация сервиса VK Music с использованием переменных окружения"""
+    # Сначала пробуем загрузить токен из нашего JSON файла
+    logger.debug("VK Music DEBUG: Попытка загрузки токена из JSON файла")
+    token = load_token_from_json()
+    if token:
+        try:
+            logger.debug(f"VK Music DEBUG: Создаем сервис с токеном из JSON: {token[:10]}***")
+            service = Service(token)
+            if service:
+                logger.info("VK Music: Сервис успешно создан с токеном из JSON")
+                return service
+        except Exception as e:
+            logger.warning(f"VK Music: Не удалось создать сервис с токеном из JSON: {e}")
+    
+    # Затем пробуем загрузить сервис из конфига библиотеки
     try:
-        # Пробуем загрузить сервис из конфига
-        logger.debug("VK Music DEBUG: Попытка загрузки сервиса из конфига")
+        logger.debug("VK Music DEBUG: Попытка загрузки сервиса из конфига библиотеки")
         service = Service.parse_config()
-        logger.info("VK Music: сервис успешно инициализирован из конфига")
-        return service
+        if service:
+            logger.info("VK Music: сервис успешно инициализирован из конфига библиотеки")
+            return service
+        else:
+            logger.warning("VK Music: сервис не был инициализирован из конфига, хотя исключение не возникло")
     except Exception as e:
-        logger.warning(f"VK Music: не удалось загрузить конфиг: {e}")
+        logger.warning(f"VK Music: не удалось загрузить конфиг библиотеки: {e}")
         logger.debug(f"VK Music DEBUG: Трассировка ошибки: {traceback.format_exc()}")
-        
-        # Если не получилось - пробуем авторизоваться заново
-        login = os.getenv("VK_LOGIN")
-        password = os.getenv("VK_PASSWORD")
+    
+    # Если всё не получилось - пробуем авторизоваться заново
+    login = os.getenv("VK_LOGIN")
+    password = os.getenv("VK_PASSWORD")
 
-        logger.debug(f"VK Music DEBUG: Попытка авторизации с логином: {login[:3]}*** и паролем: ***")
-        
-        if not login or not password:
-            logger.error("VK Music: Переменные окружения VK_LOGIN и VK_PASSWORD не установлены")
-            return None
+    logger.debug(f"VK Music DEBUG: Попытка авторизации с логином: {login[:3] if login and len(login) > 3 else 'None'}*** и паролем: ***")
+    
+    if not login or not password:
+        logger.error("VK Music: Переменные окружения VK_LOGIN и VK_PASSWORD не установлены")
+        return None
+    
+    try:
+        # Пробуем прямой подход с Account
+        logger.debug("VK Music DEBUG: Пробуем прямой подход авторизации через Account")
+        account = Account(login, password)
+        logger.debug("VK Music DEBUG: Account создан, пробуем получить токен")
         
         try:
-            token_receiver = TokenReceiver(login, password)
+            token = account.get_token()
+            logger.debug(f"VK Music DEBUG: Получен токен напрямую: {token[:10]}*** (длина: {len(token)})")
             
-            logger.debug("VK Music DEBUG: TokenReceiver создан, вызываем auth()")
-            auth_result = token_receiver.auth()
-            logger.debug(f"VK Music DEBUG: Результат авторизации: {auth_result}")
+            # Сохраняем токен в наш JSON
+            save_token_to_json(token)
             
-            if auth_result:
-                logger.info("VK Music: Токен успешно получен")
-                logger.debug("VK Music DEBUG: Сохраняем токен в конфиг")
-                token_receiver.save_to_config()
-                logger.debug("VK Music DEBUG: Загружаем сервис из обновленного конфига")
-                return Service.parse_config()
-            else:
-                logger.error("VK Music: Ошибка авторизации")
-                return None
-        except Exception as e:
-            logger.error(f"VK Music: Ошибка при авторизации: {str(e)}")
-            logger.debug(f"VK Music DEBUG: Трассировка ошибки авторизации: {traceback.format_exc()}")
+            # Создаем сервис напрямую 
+            logger.debug("VK Music DEBUG: Создаем сервис напрямую с полученным токеном")
+            service = Service(token)
+            logger.info("VK Music: Сервис успешно создан напрямую")
+            return service
+        except Exception as token_err:
+            logger.warning(f"VK Music: Не удалось получить токен напрямую: {token_err}")
+            logger.debug(f"VK Music DEBUG: Трассировка ошибки получения токена: {traceback.format_exc()}")
+        
+        # Если прямой подход не сработал, используем TokenReceiver
+        logger.debug("VK Music DEBUG: Переходим к TokenReceiver")
+        token_receiver = TokenReceiver(login, password)
+        
+        logger.debug("VK Music DEBUG: TokenReceiver создан, вызываем auth()")
+        auth_result = token_receiver.auth()
+        logger.debug(f"VK Music DEBUG: Результат авторизации: {auth_result}")
+        
+        if auth_result:
+            logger.info("VK Music: Токен успешно получен через TokenReceiver")
+            
+            # Пытаемся получить токен и сохранить в наш JSON
+            try:
+                token = token_receiver.token
+                if token:
+                    save_token_to_json(token)
+                    service = Service(token)
+                    logger.info("VK Music: Сервис успешно создан с токеном из TokenReceiver")
+                    return service
+            except Exception as e:
+                logger.warning(f"VK Music: Не удалось получить токен из TokenReceiver: {e}")
+            
+            # Если не получилось получить токен напрямую, используем стандартный механизм
+            logger.debug("VK Music DEBUG: Сохраняем токен в конфиг библиотеки")
+            token_receiver.save_to_config()
+            logger.debug("VK Music DEBUG: Загружаем сервис из обновленного конфига библиотеки")
+            return Service.parse_config()
+        else:
+            logger.error("VK Music: Ошибка авторизации через TokenReceiver")
             return None
+    except Exception as e:
+        logger.error(f"VK Music: Ошибка при авторизации: {str(e)}")
+        logger.debug(f"VK Music DEBUG: Трассировка ошибки авторизации: {traceback.format_exc()}")
+        return None
 
 async def search_vk_tracks(query, max_results=50):
     """Асинхронная функция для поиска треков ВКонтакте по текстовому запросу"""
