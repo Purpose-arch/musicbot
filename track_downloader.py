@@ -4,6 +4,8 @@ import asyncio
 import tempfile
 import traceback
 import uuid
+import requests
+from urllib.parse import urlparse
 
 # Disable debug prints
 import builtins
@@ -21,15 +23,48 @@ from utils import set_mp3_metadata
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
 
 
-def _blocking_download_and_convert(url, download_opts):
+def _blocking_download_and_convert(url, download_opts, direct_url=None):
     """Helper function to run blocking yt-dlp download."""
-    print(f"[_blocking_dl] Starting yt-dlp download command for: {url}")
+    print(f"[_blocking_dl] Starting download for: {url}")
     try:
+        if direct_url:
+            print(f"[_blocking_dl] Using direct URL: {direct_url}")
+            # Извлекаем имя файла из настроек yt-dlp
+            output_template = download_opts.get('outtmpl', 'output.%(ext)s')
+            output_path = output_template.replace('.%(ext)s', '.mp3')
+            
+            # Скачиваем файл напрямую через requests
+            try:
+                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                headers = {"User-Agent": user_agent}
+                r = requests.get(direct_url, headers=headers, stream=True, timeout=60)
+                r.raise_for_status()
+                
+                with open(output_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                # Проверяем, что файл успешно скачался и имеет адекватный размер
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 1024*100:  # >100KB
+                    print(f"[_blocking_dl] Successfully downloaded via direct URL to: {output_path}")
+                    return
+                else:
+                    print(f"[_blocking_dl] Direct download produced too small file, falling back to yt-dlp")
+                    # Если файл слишком маленький, удаляем его и пробуем скачать через yt-dlp
+                    if os.path.exists(output_path):
+                        os.remove(output_path)
+            except Exception as e:
+                print(f"[_blocking_dl] Error during direct download: {e}, falling back to yt-dlp")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                    
+        # Если прямое скачивание не удалось или не было прямого URL, используем yt-dlp
         with yt_dlp.YoutubeDL(download_opts) as ydl:
             ydl.download([url])
             print(f"[_blocking_dl] yt-dlp download command finished for: {url}.")
     except Exception as e:
-        print(f"[_blocking_dl] ERROR during yt-dlp download command for {url}: {type(e).__name__} - {e}")
+        print(f"[_blocking_dl] ERROR during download for {url}: {type(e).__name__} - {e}")
         print(traceback.format_exc())
         raise
 
@@ -44,6 +79,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     original_status_message_id = None
     chat_id_for_updates = None
     url = track_data.get('url', '')
+    direct_url = track_data.get('direct_url')
 
     # Determine message context
     if is_playlist_track:
@@ -125,9 +161,9 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         }
         expected_mp3 = base_temp_path + '.mp3'
 
-        # Blocking download
+        # Blocking download, с использованием direct_url если доступен
         print(f"Starting download for: {title} - {artist}")
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
+        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts, direct_url)
         print(f"Finished blocking download for: {title} - {artist}")
 
         # Check file exists

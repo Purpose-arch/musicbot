@@ -15,8 +15,11 @@ GROUP_TRACKS_PER_PAGE = 5
 GROUP_MAX_TRACKS = 150
 
 # DEPRECATED: MAX_RETRIES = 3  
-MIN_SONG_DURATION = 45  # seconds
-MAX_SONG_DURATION = 720  # seconds (12 minutes)
+MIN_SONG_DURATION = 30  # seconds - минимальная длительность трека для поиска
+MAX_SONG_DURATION = 900  # seconds (15 minutes) - максимальная длительность трека для поиска
+
+# Минимальная длительность для треков, чтобы они не считались превью
+MIN_PREVIEW_DURATION = 90  # seconds - если меньше, считаем превью и пытаемся найти полную версию
 
 MAX_PARALLEL_DOWNLOADS = 5
 
