@@ -99,11 +99,13 @@ async def cmd_search(message: types.Message):
     vk_task = asyncio.create_task(search_vk(query, max_results))
     sc, vk = await asyncio.gather(sc_task, vk_task)
     combined = []
-    for t in sc:
-        if 'source' not in t: t['source'] = 'soundcloud'
-        combined.append(t)
+    # Сначала добавляем результаты из VK (приоритет)
     for t in vk:
         if 'source' not in t: t['source'] = 'vk'
+        combined.append(t)
+    # Затем добавляем результаты из SoundCloud
+    for t in sc:
+        if 'source' not in t: t['source'] = 'soundcloud'
         combined.append(t)
     # Сортируем по длительности (по убыванию)
     combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
@@ -546,8 +548,10 @@ async def handle_text(message: types.Message):
             vk_task = asyncio.create_task(search_vk(message.text, maxr))
             sc, vk = await asyncio.gather(sc_task, vk_task)
             combined = []
-            for t in sc: combined.append({**t, 'source': 'soundcloud'})
+            # Сначала добавляем результаты из VK (приоритет)
             for t in vk: combined.append({**t, 'source': 'vk'})
+            # Затем добавляем результаты из SoundCloud
+            for t in sc: combined.append({**t, 'source': 'soundcloud'})
             combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
             if not combined:
                 await bot.edit_message_text("❌ ничего не нашел", chat_id=searching.chat.id, message_id=searching.message_id)
@@ -595,8 +599,10 @@ async def handle_group_search(message: types.Message, query: str):
         vk_task = asyncio.create_task(search_vk(query, maxr))
         sc, vk = await asyncio.gather(sc_task, vk_task)
         combined = []
-        for t in sc: combined.append({**t, 'source': 'soundcloud'})
+        # Сначала добавляем результаты из VK (приоритет)
         for t in vk: combined.append({**t, 'source': 'vk'})
+        # Затем добавляем результаты из SoundCloud
+        for t in sc: combined.append({**t, 'source': 'soundcloud'})
         combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
