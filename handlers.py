@@ -107,9 +107,6 @@ async def cmd_search(message: types.Message):
     for t in sc:
         if 'source' not in t: t['source'] = 'soundcloud'
         combined.append(t)
-    # Сортируем по длительности (по убыванию)
-    combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
-    
     if not combined:
         await message.answer("❌ чет ничего не нашлось, попробуй другой запрос")
         await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
@@ -552,7 +549,6 @@ async def handle_text(message: types.Message):
             for t in vk: combined.append({**t, 'source': 'vk'})
             # Затем добавляем результаты из SoundCloud
             for t in sc: combined.append({**t, 'source': 'soundcloud'})
-            combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
             if not combined:
                 await bot.edit_message_text("❌ ничего не нашел", chat_id=searching.chat.id, message_id=searching.message_id)
                 return
@@ -603,7 +599,6 @@ async def handle_group_search(message: types.Message, query: str):
         for t in vk: combined.append({**t, 'source': 'vk'})
         # Затем добавляем результаты из SoundCloud
         for t in sc: combined.append({**t, 'source': 'soundcloud'})
-        combined.sort(key=lambda x: x.get('duration', 0), reverse=True)
         if not combined:
             await bot.edit_message_text("❌ ничего не нашел", chat_id=status.chat.id, message_id=status.message_id)
             return
