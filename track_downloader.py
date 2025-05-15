@@ -4,8 +4,6 @@ import asyncio
 import tempfile
 import traceback
 import uuid
-import requests
-from urllib.parse import urlparse
 
 # Disable debug prints
 import builtins
@@ -21,52 +19,46 @@ from config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
+from vk_music import download_vk_track  # Импортируем функцию скачивания из VK
 
 
-def _blocking_download_and_convert(url, download_opts, direct_url=None):
+def _blocking_download_and_convert(url, download_opts):
     """Helper function to run blocking yt-dlp download."""
-    print(f"[_blocking_dl] Starting download for: {url}")
-    try:
-        if direct_url:
-            print(f"[_blocking_dl] Using direct URL: {direct_url}")
-            # Извлекаем имя файла из настроек yt-dlp
-            output_template = download_opts.get('outtmpl', 'output.%(ext)s')
-            output_path = output_template.replace('.%(ext)s', '.mp3')
+    print(f"[_blocking_dl] Starting download command for: {url}")
+    
+    # Проверяем, является ли URL внутренней ссылкой на VK
+    if url.startswith("vk_internal:"):
+        try:
+            track_obj = download_opts.get("vk_track_obj")
+            target_path = download_opts.get("target_path")
             
-            # Скачиваем файл напрямую через requests
-            try:
-                user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-                headers = {"User-Agent": user_agent}
-                r = requests.get(direct_url, headers=headers, stream=True, timeout=60)
-                r.raise_for_status()
+            if not track_obj or not target_path:
+                raise ValueError("Неверные параметры для скачивания трека VK")
+            
+            # Выполняем синхронное скачивание
+            from vk_music import init_vk_service
+            service = init_vk_service()
+            if not service:
+                raise Exception("Не удалось инициализировать сервис VK")
                 
-                with open(output_path, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                
-                # Проверяем, что файл успешно скачался и имеет адекватный размер
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 1024*100:  # >100KB
-                    print(f"[_blocking_dl] Successfully downloaded via direct URL to: {output_path}")
-                    return
-                else:
-                    print(f"[_blocking_dl] Direct download produced too small file, falling back to yt-dlp")
-                    # Если файл слишком маленький, удаляем его и пробуем скачать через yt-dlp
-                    if os.path.exists(output_path):
-                        os.remove(output_path)
-            except Exception as e:
-                print(f"[_blocking_dl] Error during direct download: {e}, falling back to yt-dlp")
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                    
-        # Если прямое скачивание не удалось или не было прямого URL, используем yt-dlp
-        with yt_dlp.YoutubeDL(download_opts) as ydl:
-            ydl.download([url])
-            print(f"[_blocking_dl] yt-dlp download command finished for: {url}.")
-    except Exception as e:
-        print(f"[_blocking_dl] ERROR during download for {url}: {type(e).__name__} - {e}")
-        print(traceback.format_exc())
-        raise
+            service.save_music(track_obj, target_path)
+            print(f"[_blocking_dl] VK download completed for: {url}")
+            return
+            
+        except Exception as e:
+            print(f"[_blocking_dl] ERROR during VK download for {url}: {type(e).__name__} - {e}")
+            print(traceback.format_exc())
+            raise
+    else:
+        # Стандартное скачивание через yt-dlp
+        try:
+            with yt_dlp.YoutubeDL(download_opts) as ydl:
+                ydl.download([url])
+                print(f"[_blocking_dl] yt-dlp download command finished for: {url}.")
+        except Exception as e:
+            print(f"[_blocking_dl] ERROR during yt-dlp download command for {url}: {type(e).__name__} - {e}")
+            print(traceback.format_exc())
+            raise
 
 
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
@@ -79,7 +71,6 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     original_status_message_id = None
     chat_id_for_updates = None
     url = track_data.get('url', '')
-    direct_url = track_data.get('direct_url')
 
     # Determine message context
     if is_playlist_track:
@@ -150,21 +141,37 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                 except Exception as e:
                     print(f"Warning: Could not remove {p}: {e}")
 
-        # Download options
-        download_opts = {
-            'format':'bestaudio[ext=m4a]/bestaudio/best',
-            'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
-            'outtmpl':base_temp_path + '.%(ext)s',
-            'quiet':True,'verbose':False,'no_warnings':True,
-            'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
-            'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
-        }
         expected_mp3 = base_temp_path + '.mp3'
-
-        # Blocking download, с использованием direct_url если доступен
-        print(f"Starting download for: {title} - {artist}")
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts, direct_url)
-        print(f"Finished blocking download for: {title} - {artist}")
+        
+        # Проверяем, является ли трек треком из VK
+        if url.startswith("vk_internal:"):
+            # Для VK треков используем собственный метод скачивания
+            print(f"Starting VK download for: {title} - {artist}")
+            
+            # Подготавливаем параметры для VK скачивания
+            download_opts = {
+                "vk_track_obj": track_data.get("vk_track_obj"),
+                "target_path": expected_mp3
+            }
+            
+            # Запускаем блокирующее скачивание
+            await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
+            print(f"Finished blocking VK download for: {title} - {artist}")
+        else:
+            # Download options для yt-dlp
+            download_opts = {
+                'format':'bestaudio[ext=m4a]/bestaudio/best',
+                'postprocessors':[{'key':'FFmpegExtractAudio','preferredcodec':'mp3','preferredquality':'192'}],
+                'outtmpl':base_temp_path + '.%(ext)s',
+                'quiet':True,'verbose':False,'no_warnings':True,
+                'prefer_ffmpeg':True,'nocheckcertificate':True,'ignoreerrors':True,
+                'extract_flat':False,'ffmpeg_location':'/usr/bin/ffmpeg'
+            }
+            
+            # Blocking download через yt-dlp
+            print(f"Starting download for: {title} - {artist}")
+            await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
+            print(f"Finished blocking download for: {title} - {artist}")
 
         # Check file exists
         if not os.path.exists(expected_mp3):
