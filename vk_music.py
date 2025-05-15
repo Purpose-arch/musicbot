@@ -1,8 +1,8 @@
 import os
 import logging
-import traceback  # Добавляем для печати стека ошибок
+import traceback
 import json
-from vkpymusic import TokenReceiver, Service, Account
+from vkpymusic import TokenReceiver, Service
 
 # Настраиваем логирование
 logger = logging.getLogger(__name__)
@@ -87,29 +87,8 @@ def init_vk_service():
         return None
     
     try:
-        # Пробуем прямой подход с Account
-        logger.debug("VK Music DEBUG: Пробуем прямой подход авторизации через Account")
-        account = Account(login, password)
-        logger.debug("VK Music DEBUG: Account создан, пробуем получить токен")
-        
-        try:
-            token = account.get_token()
-            logger.debug(f"VK Music DEBUG: Получен токен напрямую: {token[:10]}*** (длина: {len(token)})")
-            
-            # Сохраняем токен в наш JSON
-            save_token_to_json(token)
-            
-            # Создаем сервис напрямую 
-            logger.debug("VK Music DEBUG: Создаем сервис напрямую с полученным токеном")
-            service = Service(token)
-            logger.info("VK Music: Сервис успешно создан напрямую")
-            return service
-        except Exception as token_err:
-            logger.warning(f"VK Music: Не удалось получить токен напрямую: {token_err}")
-            logger.debug(f"VK Music DEBUG: Трассировка ошибки получения токена: {traceback.format_exc()}")
-        
-        # Если прямой подход не сработал, используем TokenReceiver
-        logger.debug("VK Music DEBUG: Переходим к TokenReceiver")
+        # Используем TokenReceiver для получения токена
+        logger.debug("VK Music DEBUG: Создаем TokenReceiver для авторизации")
         token_receiver = TokenReceiver(login, password)
         
         logger.debug("VK Music DEBUG: TokenReceiver создан, вызываем auth()")
@@ -119,9 +98,9 @@ def init_vk_service():
         if auth_result:
             logger.info("VK Music: Токен успешно получен через TokenReceiver")
             
-            # Пытаемся получить токен и сохранить в наш JSON
+            # Пытаемся получить токен
             try:
-                token = token_receiver.token
+                token = token_receiver.get_token()
                 if token:
                     save_token_to_json(token)
                     service = Service(token)
