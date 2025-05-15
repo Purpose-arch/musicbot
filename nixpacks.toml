@@ -1,10 +1,6 @@
 # nixpacks.toml
-# Configuration file for Railway's Nixpacks builder
+# Конфигурация для Railway Nixpacks builder
 
-# System packages are now handled by Dockerfile
-# [phases.setup]
-# aptPkgs = ["ffmpeg"]
-
-# Define the command to start the application
+# Команда для запуска приложения
 [start]
-cmd = "python main.py" 
+cmd = "python main.py"

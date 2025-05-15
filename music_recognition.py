@@ -133,65 +133,66 @@ async def search_yandex_music(artist: str, track: str) -> Optional[str]:
         logging.error(f"Yandex Music error for {artist} - {track}: {e}")
         return None
 
-async def process_music(message, client, chat_id: int, message_id: int):
-    """
-    Загрузка музыкального файла, распознавание трека через ShazamIO,
-    получение текста песни из нескольких источников и отправка
-    текста в виде expandable blockquote.
-    """
-    # Создаем временную директорию для скачивания файла
-    with tempfile.TemporaryDirectory() as tmpdir:
-        path = await message.download_media(tmpdir)
-        if not path:
-            await client.send_message(chat_id, "❌ Не удалось скачать музыкальный файл.", reply_to=message_id)
-            return
-
-        # Уведомляем пользователя о начале распознавания и сохраняем объект сообщения
-        progress_message = await client.send_message(chat_id, "🔎 Распознаю трек, подождите...", reply_to=message_id)
-
-        try:
-            # Распознаем трек
-            result = await shazam.recognize(path)
-            track_info = result.get("track", {})
-            title = track_info.get("title") or track_info.get("heading")
-            artist = track_info.get("subtitle")
-            if not title or not artist:
-                # Редактируем сообщение о прогрессе вместо отправки нового
-                await progress_message.edit(text="❌ Не удалось распознать трек.")
-                return
-
-            # Параллельно ищем текст песни во всех источниках в порядке приоритета
-            lyrics_tasks = [
-                search_yandex_music(artist, title),
-                search_musicxmatch(artist, title),
-                search_genius(artist, title),
-                search_pylyrics(artist, title),
-                search_chartlyrics(artist, title),
-                search_lyricwikia(artist, title),
-            ]
-            # Ожидаем результаты от всех задач
-            lyrics_results = await asyncio.gather(*lyrics_tasks)
-
-            # Выбираем первый успешный результат
-            lyrics_text = None
-            for txt in lyrics_results:
-                if txt:
-                    # Формируем текст с найденными словами
-                    lyrics_text = f"🎶 Текст песни '{title}' — {artist}\n\n{txt}"
-                    break
-
-            if not lyrics_text:
-                lyrics_text = f"❌ Текст песни '{title}' — {artist} не найден ни в одном источнике."
-
-            # Редактируем сообщение о прогрессе вместо отправки нового
-            await progress_message.edit(
-                text=f"<blockquote expandable>{lyrics_text}</blockquote>",
-                parse_mode="HTML"
-            )
-
-        except Exception as e:
-            logging.error(f"Error in music recognition or lyrics fetching: {e}", exc_info=True)
-            # Редактируем сообщение о прогрессе вместо отправки нового
-            await progress_message.edit(
-                text=f"❌ Ошибка распознавания трека или получения текста: {e}"
-            )
+# DEPRECATED: Неиспользуемая функция, так как вся логика распознавания и обработки музыки реализована в handlers.py в функции handle_media_recognition
+# async def process_music(message, client, chat_id: int, message_id: int):
+#     """
+#     Загрузка музыкального файла, распознавание трека через ShazamIO,
+#     получение текста песни из нескольких источников и отправка
+#     текста в виде expandable blockquote.
+#     """
+#     # Создаем временную директорию для скачивания файла
+#     with tempfile.TemporaryDirectory() as tmpdir:
+#         path = await message.download_media(tmpdir)
+#         if not path:
+#             await client.send_message(chat_id, "❌ Не удалось скачать музыкальный файл.", reply_to=message_id)
+#             return
+# 
+#         # Уведомляем пользователя о начале распознавания и сохраняем объект сообщения
+#         progress_message = await client.send_message(chat_id, "🔎 Распознаю трек, подождите...", reply_to=message_id)
+# 
+#         try:
+#             # Распознаем трек
+#             result = await shazam.recognize(path)
+#             track_info = result.get("track", {})
+#             title = track_info.get("title") or track_info.get("heading")
+#             artist = track_info.get("subtitle")
+#             if not title or not artist:
+#                 # Редактируем сообщение о прогрессе вместо отправки нового
+#                 await progress_message.edit(text="❌ Не удалось распознать трек.")
+#                 return
+# 
+#             # Параллельно ищем текст песни во всех источниках в порядке приоритета
+#             lyrics_tasks = [
+#                 search_yandex_music(artist, title),
+#                 search_musicxmatch(artist, title),
+#                 search_genius(artist, title),
+#                 search_pylyrics(artist, title),
+#                 search_chartlyrics(artist, title),
+#                 search_lyricwikia(artist, title),
+#             ]
+#             # Ожидаем результаты от всех задач
+#             lyrics_results = await asyncio.gather(*lyrics_tasks)
+# 
+#             # Выбираем первый успешный результат
+#             lyrics_text = None
+#             for txt in lyrics_results:
+#                 if txt:
+#                     # Формируем текст с найденными словами
+#                     lyrics_text = f"🎶 Текст песни '{title}' — {artist}\n\n{txt}"
+#                     break
+# 
+#             if not lyrics_text:
+#                 lyrics_text = f"❌ Текст песни '{title}' — {artist} не найден ни в одном источнике."
+# 
+#             # Редактируем сообщение о прогрессе вместо отправки нового
+#             await progress_message.edit(
+#                 text=f"<blockquote expandable>{lyrics_text}</blockquote>",
+#                 parse_mode="HTML"
+#             )
+# 
+#         except Exception as e:
+#             logging.error(f"Error in music recognition or lyrics fetching: {e}", exc_info=True)
+#             # Редактируем сообщение о прогрессе вместо отправки нового
+#             await progress_message.edit(
+#                 text=f"❌ Ошибка распознавания трека или получения текста: {e}"
+#             )

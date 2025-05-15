@@ -3,7 +3,6 @@ import tempfile
 import uuid
 import asyncio
 import traceback
-import re
 import logging
 
 import yt_dlp
