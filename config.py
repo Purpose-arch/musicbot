@@ -10,6 +10,13 @@ ADMIN_ID = os.getenv('ADMIN_ID')
 VK_LOGIN = os.getenv('VK_LOGIN', '')
 VK_PASSWORD = os.getenv('VK_PASSWORD', '')
 
+# Проверка наличия учетных данных VK при запуске
+if not VK_LOGIN or not VK_PASSWORD:
+    print("WARNING: VK_LOGIN and/or VK_PASSWORD environment variables are not set.")
+    print("VK Music search functionality will be limited or unavailable.")
+else:
+    print(f"VK credentials found: login length {len(VK_LOGIN)}, password length {len(VK_PASSWORD)}")
+
 # Параметры для личных чатов
 TRACKS_PER_PAGE = 10
 MAX_TRACKS = 300

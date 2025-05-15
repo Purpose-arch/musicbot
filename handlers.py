@@ -69,6 +69,7 @@ async def cmd_help(message: types.Message):
 /start - показать приветственное сообщение
 /help - показать это сообщение
 /search [запрос] - искать музыку по запросу
+/vksearch [запрос] - искать музыку только в ВКонтакте
 /cancel - отменить активные загрузки и очистить очередь"""
     await message.answer(help_text, parse_mode="Markdown")
 
@@ -598,6 +599,61 @@ async def handle_group_search(message: types.Message, query: str):
     
     await message.answer(
         f"🎵 нашел {len(combined)} треков по запросу «{query}» ({sources_info}) ⬇",
+        reply_markup=keyboard
+    )
+    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+
+@dp.message(Command("vksearch"))
+async def cmd_vk_search(message: types.Message):
+    """Отдельная команда для поиска только в ВКонтакте (для отладки)"""
+    if len(message.text.split()) < 2:
+        await message.answer("❌ напиши что-нибудь после /vksearch плиз\nнапример /vksearch coldplay yellow")
+        return
+    
+    query = " ".join(message.text.split()[1:])
+    logger.info(f"User {message.from_user.username} VK search: {query}")
+    
+    # Notify admin
+    await bot.send_message(
+        ADMIN_ID,
+        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск VK: {query}',
+        parse_mode="HTML"
+    )
+    
+    # Проверяем тип чата
+    is_group = message.chat.type in ('group', 'supergroup')
+    
+    searching_message = await message.answer("🔍 ищу музыку в ВКонтакте...")
+    search_id = str(uuid.uuid4())
+    
+    # Используем разные лимиты в зависимости от типа чата
+    max_results = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
+    
+    # Import VK search directly to debug import issues
+    from vk_music import search_vk_tracks
+    
+    # Ищем только в ВКонтакте
+    try:
+        results = await search_vk_tracks(query, max_results)
+        logger.debug(f"VK search returned {len(results)} results")
+    except Exception as e:
+        logger.error(f"VK search error: {e}", exc_info=True)
+        await message.answer(f"❌ Ошибка при поиске в ВК: {e}")
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+        return
+    
+    if not results:
+        await message.answer("❌ В ВКонтакте ничего не найдено по этому запросу")
+        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
+        return
+    
+    search_results[search_id] = results
+    
+    # Используем параметр is_group при создании клавиатуры
+    keyboard = create_tracks_keyboard(results, 0, search_id, is_group)
+    
+    await message.answer(
+        f"🎵 нашел для тебя {len(results)} треков в ВК по запросу «{query}» ⬇",
         reply_markup=keyboard
     )
     await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id) 

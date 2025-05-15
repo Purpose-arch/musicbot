@@ -29,25 +29,48 @@ def _blocking_download_and_convert(url, download_opts):
     # Проверяем, является ли URL внутренней ссылкой на VK
     if url.startswith("vk_internal:"):
         try:
+            print(f"[VK-DEBUG] Processing VK internal URL: {url}")
             track_obj = download_opts.get("vk_track_obj")
             target_path = download_opts.get("target_path")
             
-            if not track_obj or not target_path:
-                raise ValueError("Неверные параметры для скачивания трека VK")
+            if not track_obj:
+                print("[VK-DEBUG] Error: track_obj is missing in download_opts")
+                raise ValueError("Неверные параметры для скачивания трека VK: отсутствует vk_track_obj")
+                
+            if not target_path:
+                print("[VK-DEBUG] Error: target_path is missing in download_opts")
+                raise ValueError("Неверные параметры для скачивания трека VK: отсутствует target_path")
+            
+            print(f"[VK-DEBUG] Track object type: {type(track_obj)}, target path: {target_path}")
             
             # Выполняем синхронное скачивание
             from vk_music import init_vk_service
+            print("[VK-DEBUG] Initializing VK service for download")
             service = init_vk_service()
             if not service:
+                print("[VK-DEBUG] Failed to initialize VK service")
                 raise Exception("Не удалось инициализировать сервис VK")
+            
+            print(f"[VK-DEBUG] VK service initialized successfully, type: {type(service)}")
                 
+            print(f"[VK-DEBUG] Calling save_music with track object and path: {target_path}")
             service.save_music(track_obj, target_path)
+            
+            # Проверяем результат
+            if os.path.exists(target_path):
+                size = os.path.getsize(target_path)
+                print(f"[VK-DEBUG] File downloaded successfully: {target_path}, size: {size} bytes")
+            else:
+                print(f"[VK-DEBUG] ERROR: File not created at {target_path}")
+                
             print(f"[_blocking_dl] VK download completed for: {url}")
             return
             
         except Exception as e:
             print(f"[_blocking_dl] ERROR during VK download for {url}: {type(e).__name__} - {e}")
-            print(traceback.format_exc())
+            print(f"[VK-DEBUG] Exception details: {str(e)}")
+            import traceback
+            print(f"[VK-DEBUG] Traceback: {traceback.format_exc()}")
             raise
     else:
         # Стандартное скачивание через yt-dlp
@@ -147,16 +170,34 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
         if url.startswith("vk_internal:"):
             # Для VK треков используем собственный метод скачивания
             print(f"Starting VK download for: {title} - {artist}")
+            print(f"[VK-DEBUG] Processing VK track in download_track: {url}")
+            
+            # Проверяем наличие объекта трека
+            vk_track_obj = track_data.get("vk_track_obj")
+            if not vk_track_obj:
+                print(f"[VK-DEBUG] ERROR: vk_track_obj not found in track_data: {track_data.keys()}")
+                raise ValueError("Отсутствует объект трека VK для скачивания")
+            
+            print(f"[VK-DEBUG] VK track object type: {type(vk_track_obj)}")
             
             # Подготавливаем параметры для VK скачивания
             download_opts = {
-                "vk_track_obj": track_data.get("vk_track_obj"),
+                "vk_track_obj": vk_track_obj,
                 "target_path": expected_mp3
             }
+            
+            print(f"[VK-DEBUG] Calling blocking download with URL: {url}, target: {expected_mp3}")
             
             # Запускаем блокирующее скачивание
             await loop.run_in_executor(None, _blocking_download_and_convert, url, download_opts)
             print(f"Finished blocking VK download for: {title} - {artist}")
+            
+            # Проверяем результат
+            if os.path.exists(expected_mp3):
+                size = os.path.getsize(expected_mp3)
+                print(f"[VK-DEBUG] VK download successful, file size: {size} bytes")
+            else:
+                print(f"[VK-DEBUG] ERROR: VK download failed, file not found: {expected_mp3}")
         else:
             # Download options для yt-dlp
             download_opts = {
