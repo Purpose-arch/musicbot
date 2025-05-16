@@ -34,25 +34,29 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     actual_downloaded_path = None
     temp_path = None
 
-    # Check if URL is a VK playlist
-    vk_playlist_match = re.search(r'vk\.com/music/playlist/(-?\d+)_(\d+)_([a-zA-Z0-9]+)', url)
-    if vk_playlist_match:
-        print(f"[URL] VK Playlist detected: {url}")
+    # Check if URL is a VK playlist or album
+    # Ссылки на плейлисты: https://vk.com/music/playlist/123_456_hash
+    # Ссылки на альбомы: https://vk.com/music/album/-2000086173_23086173_hash
+    if "vk.com/music/playlist" in url or "vk.com/music/album" in url:
+        print(f"[URL] VK Playlist/Album detected: {url}")
         try:
-            # Парсим URL плейлиста
+            # Парсим URL плейлиста/альбома
             owner_id, playlist_id, access_hash = parse_playlist_url(url)
+            
+            # Определяем тип (плейлист или альбом)
+            playlist_type = "альбома" if "album" in url else "плейлиста"
             
             # Сокращаем сообщение в группах
             if is_group:
-                await bot.edit_message_text(f"⏳ получаю информацию о плейлисте...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"⏳ получаю информацию о {playlist_type}...", chat_id=status_message.chat.id, message_id=status_message.message_id)
             else:
-                await bot.edit_message_text(f"⏳ получаю информацию о плейлисте ВКонтакте...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"⏳ получаю информацию о {playlist_type} ВКонтакте...", chat_id=status_message.chat.id, message_id=status_message.message_id)
             
-            # Получаем треки из плейлиста
+            # Получаем треки из плейлиста/альбома
             tracks = await loop.run_in_executor(None, lambda: get_playlist_tracks(url))
             
             if not tracks:
-                await bot.edit_message_text(f"❌ плейлист пуст или нет доступа к трекам", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"❌ {playlist_type} пуст или нет доступа к трекам", chat_id=status_message.chat.id, message_id=status_message.message_id)
                 return
             
             # Используем разные лимиты для групп и личных чатов
@@ -60,7 +64,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             
             # Готовим информацию о треках
             playlist_id_str = str(uuid.uuid4())
-            playlist_title = f"Плейлист VK {owner_id}_{playlist_id}"
+            playlist_title = f"{'Альбом' if 'album' in url else 'Плейлист'} VK {owner_id}_{playlist_id}"
             
             processed = []
             for idx, track in enumerate(tracks):
@@ -83,7 +87,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             
             total = len(processed)
             if total == 0:
-                await bot.edit_message_text(f"❌ нет доступных треков в плейлисте", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"❌ нет доступных треков в {playlist_type}", chat_id=status_message.chat.id, message_id=status_message.message_id)
                 return
             
             if total > max_tracks:
@@ -104,9 +108,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             
             # Сокращаем сообщение в группах
             if is_group:
-                await bot.edit_message_text(f"⏳ скачиваю плейлист ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"⏳ скачиваю {playlist_type} ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
             else:
-                await bot.edit_message_text(f"⏳ найден плейлист ВКонтакте ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+                await bot.edit_message_text(f"⏳ найден {playlist_type} ВКонтакте ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
             
             # Добавляем треки в очередь
             download_queues.setdefault(user_id, [])
@@ -124,9 +128,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             return
         
         except Exception as e:
-            print(f"[URL] VK Playlist error: {e}")
+            print(f"[URL] VK Playlist/Album error: {e}")
             traceback.print_exc()
-            await bot.edit_message_text(f"❌ ошибка при обработке плейлиста ВКонтакте: {str(e)}", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            await bot.edit_message_text(f"❌ ошибка при обработке плейлиста/альбома ВКонтакте: {str(e)}", chat_id=status_message.chat.id, message_id=status_message.message_id)
             return
 
     # media download options

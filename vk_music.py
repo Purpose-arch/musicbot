@@ -79,27 +79,52 @@ def download_track(track, download_dir=None):
 
 def parse_playlist_url(url):
     """
-    Парсинг URL плейлиста ВКонтакте
+    Парсинг URL плейлиста или альбома ВКонтакте
     
     Args:
-        url (str): URL плейлиста ВКонтакте
+        url (str): URL плейлиста или альбома ВКонтакте
     
     Returns:
         tuple: (owner_id, playlist_id, access_hash)
     """
-    # Пример ссылки: https://vk.com/music/playlist/734250373_25_ee678f08d82ed514b5
-    # Извлекаем owner_id, playlist_id, access_hash из URL с использованием регулярных выражений
-    pattern = r'vk\.com/music/playlist/(-?\d+)_(\d+)_([a-zA-Z0-9]+)'
-    match = re.search(pattern, url)
+    # Проверка основных условий
+    if not url:
+        raise ValueError("Пустой URL")
     
-    if not match:
-        raise ValueError("Некорректный URL плейлиста ВКонтакте")
+    # Определяем тип ссылки
+    is_album = "vk.com/music/album" in url
+    is_playlist = "vk.com/music/playlist" in url
     
-    owner_id = int(match.group(1))
-    playlist_id = int(match.group(2))
-    access_hash = match.group(3)
+    if not (is_album or is_playlist):
+        raise ValueError(f"URL {url} не является ссылкой на плейлист или альбом ВКонтакте")
     
-    return owner_id, playlist_id, access_hash
+    # Извлекаем части URL
+    try:
+        # Получаем последнюю часть URL
+        last_part = url.split('/')[-1]
+        
+        # Извлекаем части разделенные '_'
+        parts = last_part.split('_')
+        
+        if len(parts) >= 3:
+            # Если формат: album/-2000086173_23086173_hash
+            if '/' in parts[0]:
+                type_and_owner = parts[0].split('/')
+                if len(type_and_owner) == 2:
+                    owner_id = int(type_and_owner[1])
+                    playlist_id = int(parts[1])
+                    access_hash = parts[2]
+                    return owner_id, playlist_id, access_hash
+            
+            # Формат: -2000086173_23086173_hash
+            owner_id = int(parts[0])
+            playlist_id = int(parts[1])
+            access_hash = parts[2]
+            return owner_id, playlist_id, access_hash
+        else:
+            raise ValueError(f"Неправильный формат URL: {url}")
+    except Exception as e:
+        raise ValueError(f"Ошибка при парсинге URL {url}: {str(e)}")
 
 def get_playlist_tracks(playlist_url, count=100):
     """
