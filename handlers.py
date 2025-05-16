@@ -68,59 +68,8 @@ async def cmd_help(message: types.Message):
 *команды*
 /start - показать приветственное сообщение
 /help - показать это сообщение
-/search [запрос] - искать музыку по запросу
 /cancel - отменить активные загрузки и очистить очередь"""
     await message.answer(help_text, parse_mode="Markdown")
-
-@dp.message(Command("search"))
-async def cmd_search(message: types.Message):
-    if len(message.text.split()) < 2:
-        await message.answer("❌ напиши что-нибудь после /search плиз\nнапример /search coldplay yellow")
-        return
-    query = " ".join(message.text.split()[1:])
-    logger.info(f"User {message.from_user.username} search: {query}")
-    # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
-        f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск: {query}',
-        parse_mode="HTML"
-    )
-    
-    # Проверяем тип чата
-    is_group = message.chat.type in ('group', 'supergroup')
-    
-    searching_message = await message.answer("🔍 ищу музыку...")
-    search_id = str(uuid.uuid4())
-    # Используем разные лимиты в зависимости от типа чата
-    max_results = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
-    
-    # --- Параллельный поиск ---
-    sc_task = asyncio.create_task(search_soundcloud(query, max_results))
-    vk_task = asyncio.create_task(search_vk(query, max_results))
-    sc, vk = await asyncio.gather(sc_task, vk_task)
-    combined = []
-    # Сначала добавляем результаты из VK (приоритет)
-    for t in vk:
-        if 'source' not in t: t['source'] = 'vk'
-        combined.append(t)
-    # Затем добавляем результаты из SoundCloud
-    for t in sc:
-        if 'source' not in t: t['source'] = 'soundcloud'
-        combined.append(t)
-    if not combined:
-        await message.answer("❌ чет ничего не нашлось, попробуй другой запрос")
-        await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
-        return
-    search_results[search_id] = combined
-    
-    # Используем параметр is_group при создании клавиатуры
-    keyboard = create_tracks_keyboard(combined, 0, search_id, is_group)
-    
-    await message.answer(
-        f"🎵 нашел для тебя {len(combined)} треков по запросу «{query}» ⬇",
-        reply_markup=keyboard
-    )
-    await bot.delete_message(chat_id=searching_message.chat.id, message_id=searching_message.message_id)
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
