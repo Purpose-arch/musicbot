@@ -57,26 +57,16 @@ async def fast_send_vk_track(user_id, track_data, chat_id, message_id=None, repl
                                      chat_id=chat_id, 
                                      message_id=message_id)
         
-        # ВАЖНО: берем метаданные именно из track_data, которые точно правильные
-        # Это те же данные, которые отображаются на кнопке
-        title = track_data.get('title')
-        artist = track_data.get('channel')
+        # Получаем метаданные НАПРЯМУЮ из объекта трека для 100% точности
+        title = getattr(track_obj, 'title', None) or track_data.get('title', 'Unknown Title')
+        artist = getattr(track_obj, 'artist', None) or track_data.get('channel', 'Unknown Artist')
         
-        # Проверяем, что метаданные не пустые
-        if not title or title.strip() == '':
-            title = "Неизвестный трек"
-        if not artist or artist.strip() == '':
-            artist = "Неизвестный исполнитель"
-        
-        print(f"Отправляю трек: {title} - {artist}, URL: {stream_url}")
-        
-        # При отправке audio важно использовать правильные title и performer
-        # параметры, чтобы переопределить метаданные аудиофайла
+        # Отправляем аудио напрямую по URL, но НЕ как ответ на исходное сообщение
         audio_msg = await bot.send_audio(
             chat_id=chat_id,
             audio=stream_url,  # Прямая ссылка на аудио
-            title=title,       # Явно указываем title
-            performer=artist   # Явно указываем performer
+            title=title,
+            performer=artist
         )
         
         # Ищем текст песни (по аналогии со стандартным методом)
