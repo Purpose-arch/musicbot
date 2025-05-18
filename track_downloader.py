@@ -33,6 +33,50 @@ def _blocking_download_and_convert(url, download_opts):
         print(traceback.format_exc())
         raise
 
+async def fast_send_vk_track(user_id, track_data, chat_id, message_id=None, reply_to_message_id=None):
+    """Быстрая отправка трека из VK напрямую без скачивания на диск"""
+    track_obj = track_data.get('track_obj')
+    if not track_obj:
+        return False
+    
+    try:
+        # Получаем сервис VK
+        from vk_music import get_vk_service
+        service = get_vk_service()
+        
+        # Получаем прямую ссылку на MP3 файл
+        # У объекта track уже есть URL, который нужно использовать напрямую
+        stream_url = getattr(track_obj, 'url', None) or getattr(track_obj, 'download_url', None)
+        
+        if not stream_url:
+            return False
+        
+        # Обновляем статус
+        if message_id:
+            await bot.edit_message_text("📤 отправляю...", 
+                                     chat_id=chat_id, 
+                                     message_id=message_id)
+        
+        # Отправляем аудио напрямую по URL вместо скачивания
+        title = track_data.get('title', 'Unknown')
+        artist = track_data.get('channel', 'Unknown Artist')
+        
+        await bot.send_audio(
+            chat_id=chat_id,
+            audio=stream_url,  # Прямая ссылка на аудио
+            title=title,
+            performer=artist,
+            reply_to_message_id=reply_to_message_id
+        )
+        
+        # Удаляем статус
+        if message_id:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        
+        return True
+    except Exception as e:
+        print(f"Error in fast_send_vk_track: {e}")
+        return False
 
 async def download_track(user_id, track_data, callback_message=None, status_message=None, original_message_context=None, playlist_download_id=None):
     """Downloads a single track. If part of a playlist (playlist_download_id is set),

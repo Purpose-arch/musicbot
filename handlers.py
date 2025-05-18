@@ -18,7 +18,7 @@ from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX
 from state import search_results, download_tasks, download_queues, playlist_downloads
 from search import search_soundcloud, search_vk
 from keyboard import create_tracks_keyboard
-from track_downloader import download_track, _blocking_download_and_convert
+from track_downloader import download_track, _blocking_download_and_convert, fast_send_vk_track
 from media_downloader import download_media_from_url
 from download_queue import process_download_queue
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
@@ -139,6 +139,26 @@ async def process_download_callback(callback: types.CallbackQuery):
             f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ прямое скачивание: <a href="{data["url"]}">ссылка</a>',
             parse_mode="HTML"
         )
+        
+        # Если это VK трек, пробуем использовать быстрый метод отправки
+        if data.get('source') == 'vk' and 'track_obj' in data:
+            # Сообщение о статусе
+            status = await callback.message.answer(f"⏳ отправляю...")
+            await callback.answer("начал отправку")
+            
+            # Пытаемся использовать быстрый метод
+            success = await fast_send_vk_track(
+                user_id=user,
+                track_data=data,
+                chat_id=callback.message.chat.id,
+                message_id=status.message_id,
+                reply_to_message_id=callback.message.message_id
+            )
+            
+            if success:
+                return
+                
+        # Если быстрый метод не удался или это не VK трек, продолжаем стандартный путь
         if data['url'] in download_tasks.get(user, {}):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True); return
         if any(item[0]['url']==data['url'] for item in download_queues.get(user, [])):
@@ -180,7 +200,27 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
             f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ скачивание трека: <a href="{data["url"]}">{data["title"]}</a>',
             parse_mode="HTML"
         )
+        
         user = callback.from_user.id
+        # Если это VK трек, пробуем использовать быстрый метод отправки
+        if data.get('source') == 'vk' and 'track_obj' in data:
+            # Для групп сокращаем сообщение
+            status = await callback.message.answer(f"⏳ отправляю...")
+            await callback.answer("начал отправку")
+            
+            # Пытаемся использовать быстрый метод
+            success = await fast_send_vk_track(
+                user_id=user,
+                track_data=data,
+                chat_id=callback.message.chat.id,
+                message_id=status.message_id,
+                reply_to_message_id=callback.message.message_id
+            )
+            
+            if success:
+                return
+        
+        # Если быстрый метод не удался или это не VK трек, продолжаем стандартный путь
         if data['url'] in download_tasks.get(user, {}) or any(item[0]['url']==data['url'] for item in download_queues.get(user, [])):
             await callback.answer("этот трек уже качается или в очереди", show_alert=True); return
         active = sum(1 for t in download_tasks.get(user, {}).values() if not t.done())
@@ -316,10 +356,22 @@ async def handle_media_recognition(message: types.Message):
         # 3. Search for the track
         search_query = f"{rec_artist} {rec_title}"
         max_results = 10 # Увеличил количество результатов с 5 до 10 для более точного поиска
-        sc_results = await search_soundcloud(search_query, max_results)
         
-        # Теперь поиск только в SoundCloud
-        search_results_list = sc_results
+        # Асинхронный поиск в обоих источниках - VK и SoundCloud
+        sc_task = asyncio.create_task(search_soundcloud(search_query, max_results))
+        vk_task = asyncio.create_task(search_vk(search_query, max_results))
+        sc_results, vk_results = await asyncio.gather(sc_task, vk_task)
+        
+        # Комбинируем результаты с приоритетом VK
+        combined_results = []
+        # Сначала добавляем результаты из VK (приоритет)
+        for t in vk_results: 
+            combined_results.append({**t, 'source': 'vk'})
+        # Затем добавляем результаты из SoundCloud
+        for t in sc_results: 
+            combined_results.append({**t, 'source': 'soundcloud'})
+            
+        search_results_list = combined_results
 
         first_valid_result = None
         for res in search_results_list:
@@ -406,10 +458,9 @@ async def handle_media_recognition(message: types.Message):
         )
 
         if lyrics:
-            lyrics_formatted = f"🎶 Текст песни '{rec_title}' — {rec_artist}\n\n{lyrics}"
             await bot.send_message(
                 chat_id,
-                f"<blockquote expandable>{lyrics_formatted}</blockquote>",
+                f"<blockquote expandable>{lyrics}</blockquote>",
                 reply_to_message_id=audio_msg.message_id, # Reply to the sent audio
                 parse_mode="HTML"
             )
@@ -548,4 +599,4 @@ async def handle_group_search(message: types.Message, query: str):
         # Сокращаем текст сообщения для группы
         await bot.edit_message_text(f"🎵 найдено {len(combined)}", chat_id=status.chat.id, message_id=status.message_id, reply_markup=kb)
     except Exception as e:
-        await bot.edit_message_text(f"❌ ошибка: {e}", chat_id=status.chat.id, message_id=status.message_id) 
+        await bot.edit_message_text(f"❌ ошибка: {e}", chat_id=status.chat.id, message_id=status.message_id)
