@@ -60,8 +60,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 user_id=user_id,
                 track_data=track_data,
                 chat_id=original_message.chat.id,
-                message_id=status_message.message_id,
-                reply_to_message_id=original_message.message_id
+                message_id=status_message.message_id
             )
             
             if success:

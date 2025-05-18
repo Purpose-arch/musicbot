@@ -151,8 +151,7 @@ async def process_download_callback(callback: types.CallbackQuery):
                 user_id=user,
                 track_data=data,
                 chat_id=callback.message.chat.id,
-                message_id=status.message_id,
-                reply_to_message_id=callback.message.message_id
+                message_id=status.message_id
             )
             
             if success:
@@ -213,8 +212,7 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
                 user_id=user,
                 track_data=data,
                 chat_id=callback.message.chat.id,
-                message_id=status.message_id,
-                reply_to_message_id=callback.message.message_id
+                message_id=status.message_id
             )
             
             if success:

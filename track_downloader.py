@@ -57,17 +57,36 @@ async def fast_send_vk_track(user_id, track_data, chat_id, message_id=None, repl
                                      chat_id=chat_id, 
                                      message_id=message_id)
         
-        # Отправляем аудио напрямую по URL вместо скачивания
+        # Используем правильные метаданные
         title = track_data.get('title', 'Unknown')
         artist = track_data.get('channel', 'Unknown Artist')
         
-        await bot.send_audio(
+        # Отправляем аудио напрямую по URL, но НЕ как ответ на исходное сообщение
+        audio_msg = await bot.send_audio(
             chat_id=chat_id,
             audio=stream_url,  # Прямая ссылка на аудио
             title=title,
-            performer=artist,
-            reply_to_message_id=reply_to_message_id
+            performer=artist
         )
+        
+        # Ищем текст песни (по аналогии со стандартным методом)
+        lyrics = None
+        for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
+            try:
+                lyrics = await fetch(artist, title)
+            except Exception:
+                lyrics = None
+            if lyrics:
+                break
+        
+        # Отправляем текст песни, если он найден
+        if lyrics:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"<blockquote expandable>{lyrics}</blockquote>",
+                reply_to_message_id=audio_msg.message_id,  # Отвечаем на сообщение с аудио
+                parse_mode="HTML"
+            )
         
         # Удаляем статус
         if message_id:
