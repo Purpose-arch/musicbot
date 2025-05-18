@@ -37,9 +37,34 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     # Проверка если ссылка напрямую на MP3 из VK
     if url.startswith('https://cs') and ('.userapi.com/' in url or '.vk-cdn.net/' in url) and url.endswith('.mp3'):
         try:
-            # Пытаемся определить название трека из URL или установить заглушку
-            title = "Трек из VK"
-            artist = "Unknown Artist"
+            # Пытаемся извлечь название из URL
+            # Формат URL обычно содержит название в последней части пути
+            filename = url.split('/')[-1]  # Последняя часть URL
+            
+            # Пробуем получить название из имени файла (если возможно)
+            if '_' in filename:
+                parts = filename.split('_')
+                if len(parts) >= 2:
+                    # Предполагаем, что формат может быть "Artist_-_Title.mp3"
+                    name_part = '_'.join(parts[1:-1])  # Исключаем идентификатор и расширение
+                    if '-' in name_part:
+                        artist, title = name_part.split('-', 1)
+                        artist = artist.replace('_', ' ').strip()
+                        title = title.replace('_', ' ').strip()
+                    else:
+                        title = name_part.replace('_', ' ').strip()
+                        artist = "Unknown Artist"
+                else:
+                    title = filename.replace('.mp3', '').replace('_', ' ').strip()
+                    artist = "Unknown Artist"
+            else:
+                title = filename.replace('.mp3', '').strip()
+                artist = "Unknown Artist"
+            
+            # Если не удалось извлечь осмысленное название, используем заглушку
+            if not title or len(title) < 3:
+                title = "Трек из VK"
+                artist = "Unknown Artist"
             
             # Создаем минимальный набор данных для fast_send_vk_track
             track_data = {
