@@ -345,7 +345,7 @@ async def handle_media_recognition(message: types.Message):
         if is_group:
             await status_message.edit_text(f"⏳ скачиваю трек...")
         else:
-            await status_message.edit_text(f"⏳ скачиваю трек: {rec_artist} - {rec_title}...")
+            await status_message.edit_text(f"⏳ скачиваю трек {rec_artist} {rec_title}...")
 
         # 4. Download the first result
         loop = asyncio.get_running_loop()
@@ -394,13 +394,9 @@ async def handle_media_recognition(message: types.Message):
                  logger.info(f"Lyrics found for {rec_artist} - {rec_title}")
                  break # Use the first found lyrics
 
-        # 7. Send Audio and Lyrics
-        # В группах сокращаем сообщение
-        if is_group:
-            await status_message.edit_text("📤 отправляю...")
-        else:
-            await status_message.edit_text("📤 отправляю трек...")
-            
+            # 7. Send Audio and Lyrics
+        await status_message.edit_text("📤 отправляю...")
+        
         audio_msg = await bot.send_audio(
             chat_id,
             FSInputFile(downloaded_track_path),
@@ -518,12 +514,7 @@ async def handle_url_download(message: types.Message, url: str):
         parse_mode="HTML"
     )
     reply = message.reply if message.chat.type!='private' else message.answer
-    
-    # В группах делаем более краткое сообщение
-    if is_group:
-        status = await reply("⏳ скачиваю...", disable_web_page_preview=True)
-    else:
-        status = await reply(f"⏳ пытаюсь скачать медиа по ссылке {url[:50]}...", disable_web_page_preview=True)
+    status = await reply("⏳ скачиваю...", disable_web_page_preview=True)
     
     await download_media_from_url(url, message, status)
 

@@ -46,11 +46,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             # Определяем тип (плейлист или альбом)
             playlist_type = "альбома" if "album" in url else "плейлиста"
             
-            # Сокращаем сообщение в группах
-            if is_group:
-                await bot.edit_message_text(f"⏳ получаю информацию о {playlist_type}...", chat_id=status_message.chat.id, message_id=status_message.message_id)
-            else:
-                await bot.edit_message_text(f"⏳ получаю информацию о {playlist_type} ВКонтакте...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            
+            await bot.edit_message_text(f"⏳ получаю информацию о {playlist_type}...", chat_id=status_message.chat.id, message_id=status_message.message_id)
             
             # Получаем треки из плейлиста/альбома
             tracks = await loop.run_in_executor(None, lambda: get_playlist_tracks(url))
@@ -64,7 +61,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             
             # Готовим информацию о треках
             playlist_id_str = str(uuid.uuid4())
-            playlist_title = f"{'Альбом' if 'album' in url else 'Плейлист'} VK {owner_id}_{playlist_id}"
+            playlist_title = f"{'альбом' if 'album' in url else 'плейлист'} VK {owner_id}_{playlist_id}"
             
             processed = []
             for idx, track in enumerate(tracks):
@@ -106,11 +103,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 'tracks': processed
             }
             
-            # Сокращаем сообщение в группах
-            if is_group:
-                await bot.edit_message_text(f"⏳ скачиваю {playlist_type} ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
-            else:
-                await bot.edit_message_text(f"⏳ найден {playlist_type} ВКонтакте ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            await bot.edit_message_text(f"⏳ скачиваю {playlist_type} ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
             
             # Добавляем треки в очередь
             download_queues.setdefault(user_id, [])
