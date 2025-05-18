@@ -14,7 +14,7 @@ from bot_instance import bot
 from config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from state import download_queues, download_tasks, playlist_downloads
 from utils import extract_title_and_artist, set_mp3_metadata
-from track_downloader import _blocking_download_and_convert, fast_send_vk_track
+from track_downloader import _blocking_download_and_convert
 from download_queue import process_download_queue
 from vk_music import parse_playlist_url, get_playlist_tracks
 
@@ -33,41 +33,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None
     temp_path = None
-
-    # Проверка если ссылка напрямую на MP3 из VK
-    if url.startswith('https://cs') and ('.userapi.com/' in url or '.vk-cdn.net/' in url) and url.endswith('.mp3'):
-        try:
-            # Пытаемся определить название трека из URL или установить заглушку
-            title = "Трек из VK"
-            artist = "Unknown Artist"
-            
-            # Создаем минимальный набор данных для fast_send_vk_track
-            track_data = {
-                'title': title,
-                'channel': artist,
-                'url': url,
-                'source': 'vk',
-                'track_obj': type('obj', (), {'url': url})  # Простой объект с url
-            }
-            
-            # Обновляем статус
-            await bot.edit_message_text("📤 отправляю...", 
-                                     chat_id=status_message.chat.id, 
-                                     message_id=status_message.message_id)
-            
-            # Пробуем быструю отправку
-            success = await fast_send_vk_track(
-                user_id=user_id,
-                track_data=track_data,
-                chat_id=original_message.chat.id,
-                message_id=status_message.message_id
-            )
-            
-            if success:
-                return
-        except Exception as e:
-            print(f"Error in fast_send_vk_track for direct URL: {e}")
-            # Если не удалось, продолжаем стандартным путём
 
     # Check if URL is a VK playlist or album
     # Ссылки на плейлисты: https://vk.com/music/playlist/123_456_hash

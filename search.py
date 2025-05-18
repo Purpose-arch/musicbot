@@ -75,7 +75,6 @@ async def search_vk(query: str, max_results: int = 50):
                 'url': url,
                 'duration': duration,
                 'source': 'vk',
-                'track_obj': track
             })
         return results
     except Exception as e:
