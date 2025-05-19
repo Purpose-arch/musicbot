@@ -163,11 +163,11 @@ async def process_voice_or_video(message, sender_id, chat_id, message_id, client
     Processes voice or video messages: downloads the media, converts to WAV, and transcribes it.
     
     Args:
-        message: The message object containing media
+        message: The message object containing media (aiogram)
         sender_id: ID of the sender
         chat_id: ID of the chat
         message_id: ID of the message
-        client: Telethon client instance
+        client: aiogram Bot instance
         api_key: Deepgram API key
         
     Returns:
@@ -177,14 +177,26 @@ async def process_voice_or_video(message, sender_id, chat_id, message_id, client
         # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             # Define file paths
-            downloaded_path = os.path.join(temp_dir, f"media_{message_id}")
-            wav_path = os.path.join(temp_dir, f"audio_{message_id}.wav")
+            media_file = message.voice or message.audio or message.video_note
+            if not media_file:
+                logging.error("Message does not contain voice/audio/video_note")
+                return None
+                
+            # Получаем file_id из медиа-объекта
+            file_id = media_file.file_id
             
-            # Download the media
-            logging.info(f"Downloading media from message {message_id}")
-            downloaded_path = await message.download_media(file=downloaded_path)
+            # В aiogram 3.x используем просто client.download()
+            file_extension = "ogg" if message.voice else ("mp3" if message.audio else "mp4")
+            downloaded_path = os.path.join(temp_dir, f"media_{message_id}.{file_extension}")
             
-            if not downloaded_path:
+            # Скачиваем файл
+            logging.info(f"Downloading media file ID {file_id} from message {message_id}")
+            await client.download(
+                media_file,
+                destination=downloaded_path
+            )
+            
+            if not os.path.exists(downloaded_path):
                 logging.error(f"Failed to download media from message {message_id}")
                 return None
             
@@ -192,8 +204,11 @@ async def process_voice_or_video(message, sender_id, chat_id, message_id, client
             
             # Check if the media is a video note
             is_video_note = hasattr(message, 'video_note') and message.video_note
-            media_type = "video note" if is_video_note else "voice message"
+            media_type = "video note" if is_video_note else "voice message" if message.voice else "audio"
             logging.info(f"Processing {media_type}")
+            
+            # Путь для WAV файла
+            wav_path = os.path.join(temp_dir, f"audio_{message_id}.wav")
             
             # Convert the media to WAV format
             if await convert_to_wav(downloaded_path, wav_path):
@@ -211,4 +226,4 @@ async def process_voice_or_video(message, sender_id, chat_id, message_id, client
                 return None
     except Exception as e:
         logging.error(f"Error processing media message {message_id}: {e}")
-        return None 
+        return None
