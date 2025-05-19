@@ -15,3 +15,4 @@ musicxmatch-api
 lyricsgenius
 chartlyrics
 yandex-music
+deepgram-sdk

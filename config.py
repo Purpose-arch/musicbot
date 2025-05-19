@@ -38,3 +38,6 @@ YDL_AUDIO_OPTS = {
 
 VK_LOGIN = os.getenv('VK_LOGIN')
 VK_PASSWORD = os.getenv('VK_PASSWORD')
+
+# API ключ для транскрипции аудио через Deepgram
+DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
