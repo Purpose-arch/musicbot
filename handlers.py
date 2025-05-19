@@ -256,8 +256,17 @@ async def handle_media_recognition(message: types.Message):
         if not media_file:
             raise ValueError("Сообщение не содержит voice/audio/video_note")
 
-        # Define the destination path within the temporary directory
-        destination_path = os.path.join(temp_dir, f"{media_file.file_unique_id}.{media_file.mime_type.split('/')[-1] if media_file.mime_type else 'file'}")
+        # Determine file extension based on media type
+        if message.voice:
+            file_extension = "ogg"
+        elif message.audio:
+            file_extension = "mp3" # Assuming common audio type
+        elif message.video_note:
+            file_extension = "mp4" # Assuming common video note type
+        else:
+             file_extension = "file" # Fallback
+
+        destination_path = os.path.join(temp_dir, f"{media_file.file_unique_id}.{file_extension}")
         
         # Download using bot.download
         await bot.download(media_file, destination=destination_path)
