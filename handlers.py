@@ -14,7 +14,7 @@ from aiogram import F, types
 from aiogram.filters import Command
 
 from bot_instance import dp, bot, ADMIN_ID
-from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS
+from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS, LOG_GROUP_ID
 from state import search_results, download_tasks, download_queues, playlist_downloads
 from search import search_soundcloud, search_vk
 from keyboard import create_tracks_keyboard
@@ -24,14 +24,16 @@ from download_queue import process_download_queue
 from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
 from utils import set_mp3_metadata
 from transcription import process_voice_or_video
+from group_logger import send_log_message
 
 logger = logging.getLogger(__name__)
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Notify admin about start action
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /start',
         parse_mode="HTML"
     )
@@ -52,8 +54,9 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     # Notify admin about help action
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /help',
         parse_mode="HTML"
     )
@@ -75,8 +78,9 @@ async def cmd_help(message: types.Message):
 @dp.message(Command("cancel"))
 async def cmd_cancel(message: types.Message):
     # Notify admin about cancel action
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ /cancel',
         parse_mode="HTML"
     )
@@ -135,8 +139,9 @@ async def process_download_callback(callback: types.CallbackQuery):
         # Определяем тип чата
         is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
-        await bot.send_message(
-            ADMIN_ID,
+        await send_log_message(
+            bot,
+            LOG_GROUP_ID,
             f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ прямое скачивание: <a href="{data["url"]}">ссылка</a>',
             parse_mode="HTML"
         )
@@ -176,8 +181,9 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         # Определяем тип чата
         is_group = callback.message.chat.type in ('group', 'supergroup')
         # Notify admin
-        await bot.send_message(
-            ADMIN_ID,
+        await send_log_message(
+            bot,
+            LOG_GROUP_ID,
             f'👤 <a href="tg://user?id={callback.from_user.id}">{callback.from_user.full_name}</a>\n➤ скачивание трека: <a href="{data["url"]}">{data["title"]}</a>',
             parse_mode="HTML"
         )
@@ -233,8 +239,9 @@ async def handle_media_recognition(message: types.Message):
 
     # Notify admin
     media_type = "voice" if message.voice else ("audio" if message.audio else "video note")
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={user_id}">{message.from_user.full_name}</a>\n➤ распознавание {media_type}',
         parse_mode="HTML"
     )
@@ -531,8 +538,9 @@ async def handle_text(message: types.Message):
         if message.text.strip().startswith(('http://','https://')):
             await handle_url_download(message,message.text.strip()); return
         # Notify admin about private search
-        await bot.send_message(
-            ADMIN_ID,
+        await send_log_message(
+            bot,
+            LOG_GROUP_ID,
             f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в личке: {message.text.strip()}',
             parse_mode="HTML"
         )
@@ -563,8 +571,9 @@ async def handle_url_download(message: types.Message, url: str):
     logger.info(f"User {message.from_user.username} download_url: {url}")
     is_group = message.chat.type in ('group', 'supergroup')
     # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ загрузка по ссылке: <a href="{url}">ссылка</a>',
         parse_mode="HTML"
     )
@@ -576,8 +585,9 @@ async def handle_url_download(message: types.Message, url: str):
 async def handle_group_search(message: types.Message, query: str):
     logger.info(f"User {message.from_user.username} group_search: {query}")
     # Notify admin
-    await bot.send_message(
-        ADMIN_ID,
+    await send_log_message(
+        bot,
+        LOG_GROUP_ID,
         f'👤 <a href="tg://user?id={message.from_user.id}">{message.from_user.full_name}</a>\n➤ поиск в группе: {query}',
         parse_mode="HTML"
     )

@@ -39,5 +39,8 @@ YDL_AUDIO_OPTS = {
 VK_LOGIN = os.getenv('VK_LOGIN')
 VK_PASSWORD = os.getenv('VK_PASSWORD')
 
+# ID группы для отправки логов
+LOG_GROUP_ID = os.getenv('LOG_GROUP_ID')
+
 # API ключ для транскрипции аудио через Deepgram
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
