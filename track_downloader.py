@@ -77,6 +77,10 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
     title = track_data.get('title', 'Unknown Title')
     artist = track_data.get('channel', 'Unknown Artist')
     
+    # Сохраняем исходные название и исполнителя из результатов поиска
+    original_title = title
+    original_artist = artist
+    
     # Определяем тип чата для уменьшения сообщений в группе
     is_group = False
     if callback_message:
@@ -178,23 +182,27 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                             asyncio.create_task(send_completed_playlist(playlist_download_id))
                 else:
                     # Single track:
-                    if set_mp3_metadata(temp_path, title, artist):
-                        # Attempt Shazam recognition to refine title and artist
+                    # Используем исходные метаданные для записи в файл
+                    if set_mp3_metadata(temp_path, original_title, original_artist): # Changed to use original_title, original_artist
+                        # Attempt Shazam recognition (optional, results won't affect Telegram message metadata or lyric search)
                         try:
                             result = await shazam.recognize(temp_path)
                             track_info = result.get("track", {})
                             rec_title = track_info.get("title") or track_info.get("heading")
                             rec_artist = track_info.get("subtitle")
-                            if rec_title and rec_artist:
-                                title, artist = rec_title, rec_artist
+                            # We do NOT update 'title' and 'artist' here, so original values are used for send_audio/lyric search
+                            # DEPRECATED: Do not update title/artist from Shazam for Telegram/lyrics
+                            # if rec_title and rec_artist:
+                            #     title, artist = rec_title, rec_artist
                         except Exception as e:
                             print(f"Shazam recognition error: {e}")
 
-                        # Fetch lyrics in priority order
+                        # Fetch lyrics using original artist and title: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
                         lyrics = None
                         for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
                             try:
-                                lyrics = await fetch(artist, title)
+                                # Используем исходные название и исполнителя для поиска текста
+                                lyrics = await fetch(original_artist, original_title) # Changed to use original_artist, original_title
                             except Exception:
                                 lyrics = None
                             if lyrics:
@@ -211,12 +219,12 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                             if not is_group:
                                 snd = await ctx.answer("📤 отправляю трек")
                             
-                            # Send audio and capture the message
+                            # Send audio and capture the message using original metadata
                             audio_msg = await bot.send_audio(
                                 chat_id_for_updates,
                                 FSInputFile(temp_path),
-                                title=title,
-                                performer=artist
+                                title=original_title, # Changed to use original_title
+                                performer=original_artist # Changed to use original_artist
                             )
                             
                             # Delete the temporary status message только в личных чатах
@@ -318,23 +326,27 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                     asyncio.create_task(send_completed_playlist(playlist_download_id))
         else:
             # Single track:
-            if set_mp3_metadata(temp_path, title, artist):
-                # Attempt Shazam recognition to refine title and artist
+            # Используем исходные метаданные для записи в файл
+            if set_mp3_metadata(temp_path, original_title, original_artist): # Changed to use original_title, original_artist
+                # Attempt Shazam recognition (optional, results won't affect Telegram message metadata or lyric search)
                 try:
                     result = await shazam.recognize(temp_path)
                     track_info = result.get("track", {})
                     rec_title = track_info.get("title") or track_info.get("heading")
                     rec_artist = track_info.get("subtitle")
-                    if rec_title and rec_artist:
-                        title, artist = rec_title, rec_artist
+                    # We do NOT update 'title' and 'artist' here, so original values are used for send_audio/lyric search
+                    # DEPRECATED: Do not update title/artist from Shazam for Telegram/lyrics
+                    # if rec_title and rec_artist:
+                    #     title, artist = rec_title, rec_artist
                 except Exception as e:
                     print(f"Shazam recognition error: {e}")
 
-                # Fetch lyrics in priority order: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
+                # Fetch lyrics using original artist and title: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
                 lyrics = None
                 for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
                     try:
-                        lyrics = await fetch(artist, title)
+                        # Используем исходные название и исполнителя для поиска текста
+                        lyrics = await fetch(original_artist, original_title) # Changed to use original_artist, original_title
                     except Exception:
                         lyrics = None
                     if lyrics:
@@ -351,12 +363,12 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                     if not is_group:
                         snd = await ctx.answer("📤 отправляю трек")
                     
-                    # Send audio and capture the message
+                    # Send audio and capture the message using original metadata
                     audio_msg = await bot.send_audio(
                         chat_id_for_updates,
                         FSInputFile(temp_path),
-                        title=title,
-                        performer=artist
+                        title=original_title, # Changed to use original_title
+                        performer=original_artist # Changed to use original_artist
                     )
                     
                     # Delete the temporary status message только в личных чатах
