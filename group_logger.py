@@ -1,6 +1,6 @@
 from aiogram import Bot, types
 
-async def send_log_message(bot: Bot, chat_id: int | str, text: str, parse_mode: str = types.ParseMode.HTML):
+async def send_log_message(bot: Bot, chat_id: int | str, text: str, parse_mode: str = 'HTML'):
     """
     Отправляет лог-сообщение в указанный чат.
 
