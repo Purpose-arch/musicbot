@@ -4,14 +4,11 @@ import asyncio
 import os
 from typing import Optional, Dict, Any
 from shazamio import Shazam
-from PyLyrics import PyLyrics
-import lyricwikia
 from musicxmatch_api import MusixMatchAPI
 import re
 
 # Добавляем импорты для новых библиотек
 import lyricsgenius
-import chartlyrics
 from yandex_music import Client as YandexMusicClient
 
 # Инициализируем ShazamIO и MusicXMatch
@@ -53,23 +50,6 @@ def clean_lyrics(lyrics: str) -> str:
     
     return lyrics
 
-async def search_pylyrics(artist: str, track: str) -> Optional[str]:
-    try:
-        lyrics = await asyncio.to_thread(PyLyrics.getLyrics, artist, track)
-        return clean_lyrics(lyrics) if lyrics else None
-    except Exception as e:
-        logging.error(f"PyLyrics error for {artist} - {track}: {e}")
-        return None
-
-async def search_lyricwikia(artist: str, track: str) -> Optional[str]:
-    try:
-        lyrics = await asyncio.to_thread(lyricwikia.get_lyrics, artist, track)
-        return clean_lyrics(lyrics) if lyrics else None
-    except Exception as e:
-        logging.error(f"LyricWikia error for {artist} - {track}: {e}")
-        return None
-
-# Добавляем функцию для поиска текста песни через MusicXMatch
 async def search_musicxmatch(artist: str, track: str) -> Optional[str]:
     try:
         # Сначала ищем трек по исполнителю и названию
@@ -94,7 +74,6 @@ async def search_musicxmatch(artist: str, track: str) -> Optional[str]:
         logging.error(f"MusicXMatch error for {artist} - {track}: {e}")
         return None
 
-# Добавляем функцию для поиска текста песни через Genius
 async def search_genius(artist: str, track: str) -> Optional[str]:
     if not genius or not genius_token:
         logging.warning("Genius API token not set, skipping Genius search")
@@ -112,23 +91,6 @@ async def search_genius(artist: str, track: str) -> Optional[str]:
         logging.error(f"Genius error for {artist} - {track}: {e}")
         return None
 
-# Добавляем функцию для поиска текста песни через ChartLyrics (исправленная версия)
-async def search_chartlyrics(artist: str, track: str) -> Optional[str]:
-    try:
-        # Используем правильный синтаксис для chartlyrics
-        search_result = await asyncio.to_thread(chartlyrics.search_lyrics, track, artist)
-        if search_result and len(search_result) > 0:
-            # Берем первый результат
-            first_match = search_result[0]
-            # Получаем текст песни
-            if 'lyrics' in first_match and first_match['lyrics']:
-                return clean_lyrics(first_match['lyrics'])
-        return None
-    except Exception as e:
-        logging.error(f"ChartLyrics error for {artist} - {track}: {e}")
-        return None
-
-# Добавляем функцию для поиска текста песни через Яндекс.Музыку
 async def search_yandex_music(artist: str, track: str) -> Optional[str]:
     if not yandex_client or not yandex_token:
         logging.warning("Yandex Music token not set, skipping Yandex Music search")
@@ -148,3 +110,62 @@ async def search_yandex_music(artist: str, track: str) -> Optional[str]:
     except Exception as e:
         logging.error(f"Yandex Music error for {artist} - {track}: {e}")
         return None
+
+async def search_lyrics_parallel(artist: str, title: str, timeout: float = 10.0) -> Optional[str]:
+    """
+    Search for lyrics using multiple services in parallel with timeout.
+    Returns the first successful result or None if all searches fail.
+    
+    Args:
+        artist: Artist name
+        title: Track title
+        timeout: Maximum time to wait for all searches in seconds
+    
+    Returns:
+        Optional[str]: Found lyrics or None if not found
+    """
+    # Define search functions with their relative priority (lower number = higher priority)
+    search_functions = [
+        (1, search_genius),        # Usually has high quality lyrics
+        (2, search_yandex_music),  # Good for Russian content
+        (2, search_musicxmatch),   # Good quality but may have truncated lyrics
+    ]
+    
+    async def _search_with_timeout(priority: int, search_func, artist: str, title: str) -> tuple[int, Optional[str]]:
+        """Wrapper for search function with timeout"""
+        try:
+            lyrics = await asyncio.wait_for(search_func(artist, title), timeout=timeout)
+            if lyrics:
+                return priority, lyrics
+        except asyncio.TimeoutError:
+            logging.warning(f"{search_func.__name__} timed out after {timeout}s")
+        except Exception as e:
+            logging.error(f"{search_func.__name__} error: {e}")
+        return priority, None
+
+    # Create tasks for all search functions
+    tasks = [
+        asyncio.create_task(_search_with_timeout(priority, func, artist, title))
+        for priority, func in search_functions
+    ]
+    
+    # Wait for first successful result or all tasks to complete
+    while tasks:
+        done, tasks = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        
+        # Check completed tasks for results
+        for task in done:
+            try:
+                priority, lyrics = await task
+                if lyrics:
+                    # Cancel remaining tasks
+                    for t in tasks:
+                        t.cancel()
+                    return lyrics
+            except Exception as e:
+                logging.error(f"Error processing search result: {e}")
+                
+    return None

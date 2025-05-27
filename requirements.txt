@@ -9,10 +9,7 @@ aiohttp
 yt-dlp
 ffmpeg-python
 shazamio
-PyLyrics
-lyricwikia
 musicxmatch-api
 lyricsgenius
-chartlyrics
 yandex-music
 deepgram-sdk

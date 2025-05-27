@@ -18,7 +18,7 @@ from bot_instance import bot
 from config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
 from state import download_tasks, download_queues, playlist_downloads
 from utils import set_mp3_metadata
-from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
+from music_recognition import shazam, search_lyrics_parallel
 
 
 def _blocking_download_and_convert(url, download_opts):
@@ -184,29 +184,16 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                     # Single track:
                     # Используем исходные метаданные для записи в файл
                     if set_mp3_metadata(temp_path, original_title, original_artist): # Changed to use original_title, original_artist
-                        # Attempt Shazam recognition (optional, results won't affect Telegram message metadata or lyric search)
-                        try:
-                            result = await shazam.recognize(temp_path)
-                            track_info = result.get("track", {})
-                            rec_title = track_info.get("title") or track_info.get("heading")
-                            rec_artist = track_info.get("subtitle")
-                            # We do NOT update 'title' and 'artist' here, so original values are used for send_audio/lyric search
-                            # DEPRECATED: Do not update title/artist from Shazam for Telegram/lyrics
-                            # if rec_title and rec_artist:
-                            #     title, artist = rec_title, rec_artist
-                        except Exception as e:
-                            print(f"Shazam recognition error: {e}")
+                        
 
                         # Fetch lyrics using original artist and title: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
                         lyrics = None
-                        for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
-                            try:
-                                # Используем исходные название и исполнителя для поиска текста
-                                lyrics = await fetch(original_artist, original_title) # Changed to use original_artist, original_title
-                            except Exception:
-                                lyrics = None
-                            if lyrics:
-                                break
+                        try:
+                            # Используем исходные название и исполнителя для поиска текста
+                            lyrics = await search_lyrics_parallel(original_artist, original_title, timeout=10.0)
+                        except Exception as e:
+                            print(f"Error fetching lyrics: {e}")
+                            lyrics = None
 
                         # Delete original status message if present
                         if original_status_message_id:
@@ -328,29 +315,27 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             # Single track:
             # Используем исходные метаданные для записи в файл
             if set_mp3_metadata(temp_path, original_title, original_artist): # Changed to use original_title, original_artist
-                # Attempt Shazam recognition (optional, results won't affect Telegram message metadata or lyric search)
-                try:
-                    result = await shazam.recognize(temp_path)
-                    track_info = result.get("track", {})
-                    rec_title = track_info.get("title") or track_info.get("heading")
-                    rec_artist = track_info.get("subtitle")
-                    # We do NOT update 'title' and 'artist' here, so original values are used for send_audio/lyric search
-                    # DEPRECATED: Do not update title/artist from Shazam for Telegram/lyrics
-                    # if rec_title and rec_artist:
-                    #     title, artist = rec_title, rec_artist
-                except Exception as e:
-                    print(f"Shazam recognition error: {e}")
+                # DEPRECATED: Removed unused Shazam recognition code
+                # try:
+                #     result = await shazam.recognize(temp_path)
+                #     track_info = result.get("track", {})
+                #     rec_title = track_info.get("title") or track_info.get("heading")
+                #     rec_artist = track_info.get("subtitle")
+                #     # We do NOT update 'title' and 'artist' here, so original values are used for send_audio/lyric search
+                #     # DEPRECATED: Do not update title/artist from Shazam for Telegram/lyrics
+                #     # if rec_title and rec_artist:
+                #     #     title, artist = rec_title, rec_artist
+                # except Exception as e:
+                #     print(f"Shazam recognition error: {e}")
 
                 # Fetch lyrics using original artist and title: Genius -> Yandex Music -> MusicXMatch -> PyLyrics -> ChartLyrics -> LyricWikia
                 lyrics = None
-                for fetch in (search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia):
-                    try:
-                        # Используем исходные название и исполнителя для поиска текста
-                        lyrics = await fetch(original_artist, original_title) # Changed to use original_artist, original_title
-                    except Exception:
-                        lyrics = None
-                    if lyrics:
-                        break
+                try:
+                    # Используем исходные название и исполнителя для поиска текста
+                    lyrics = await search_lyrics_parallel(original_artist, original_title, timeout=10.0)
+                except Exception as e:
+                    print(f"Error fetching lyrics: {e}")
+                    lyrics = None
 
                 # Delete original status message if present
                 if original_status_message_id:
