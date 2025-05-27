@@ -21,7 +21,7 @@ from keyboard import create_tracks_keyboard
 from track_downloader import download_track, _blocking_download_and_convert
 from media_downloader import download_media_from_url
 from download_queue import process_download_queue
-from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_pylyrics, search_chartlyrics, search_lyricwikia
+from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_lyrics_parallel
 from utils import set_mp3_metadata
 from transcription import process_voice_or_video
 from group_logger import send_log_message
@@ -398,21 +398,13 @@ async def handle_media_recognition(message: types.Message):
             set_mp3_metadata(downloaded_track_path, rec_title, rec_artist)
 
             # 8. Fetch lyrics (using recognized title/artist)
-            lyrics = None
-            lyrics_tasks = [
-                search_yandex_music(rec_artist, rec_title),
-                search_musicxmatch(rec_artist, rec_title),
-                search_genius(rec_artist, rec_title),
-                search_pylyrics(rec_artist, rec_title),
-                search_chartlyrics(rec_artist, rec_title),
-                search_lyricwikia(rec_artist, rec_title),
-            ]
-            lyrics_results = await asyncio.gather(*lyrics_tasks, return_exceptions=True)
-            for res in lyrics_results:
-                if isinstance(res, str) and res:
-                    lyrics = res
+            try:
+                lyrics = await search_lyrics_parallel(rec_artist, rec_title, timeout=10.0)
+                if lyrics:
                     logger.info(f"Lyrics found for {rec_artist} - {rec_title}")
-                    break
+            except Exception as e:
+                logger.error(f"Error fetching lyrics: {e}")
+                lyrics = None
 
             # 9. Send Audio and Lyrics
             await status_message.edit_text("📤 отправляю...")
