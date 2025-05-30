@@ -5,6 +5,7 @@ import asyncio
 import traceback
 import logging
 import re
+import requests
 
 import yt_dlp
 from aiogram import types
@@ -23,6 +24,14 @@ logger = logging.getLogger(__name__)
 print = lambda *args, **kwargs: None
 traceback.print_exc = lambda *args, **kwargs: None
 
+def expand_pinterest_url(short_url: str) -> str:
+    """Expands Pinterest short URLs to full URLs."""
+    try:
+        response = requests.head(short_url, allow_redirects=True)
+        return response.url
+    except:
+        return short_url
+
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
     """Downloads media (audio/video) or playlists from URL using yt-dlp."""
     loop = asyncio.get_running_loop()
@@ -33,6 +42,11 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None
     temp_path = None
+
+    # Expand Pinterest short URLs
+    if "pin.it" in url:
+        url = await loop.run_in_executor(None, expand_pinterest_url, url)
+        print(f"[URL] Expanded Pinterest URL: {url}")
 
     # Check if URL is a VK playlist or album
     # Ссылки на плейлисты: https://vk.com/music/playlist/123_456_hash
@@ -140,6 +154,15 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         'ffmpeg_location': '/usr/bin/ffmpeg',
         'merge_output_format': 'mp4',
     }
+
+    # Add Pinterest-specific options
+    if 'pinterest.com' in url or 'pin.it' in url:
+        media_opts.update({
+            'extract_flat': True,
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'best[ext=mp4]/best[ext=jpg]/best',  # Prefer MP4 for videos, JPG for images
+        })
 
     try:
         # extract info
