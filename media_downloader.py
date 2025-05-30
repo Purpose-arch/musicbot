@@ -37,33 +37,112 @@ def extract_pinterest_media(url: str) -> dict:
     """Extracts media URL directly from Pinterest page."""
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Sec-Fetch-Mode': 'navigate'
         }
         response = requests.get(url, headers=headers)
         
-        # Try to find the media URL in the page source
-        if 'pin_data = ' in response.text:
-            data_start = response.text.index('pin_data = ') + len('pin_data = ')
-            data_end = response.text.index('};', data_start) + 1
-            pin_data = json.loads(response.text[data_start:data_end])
-            
-            if 'videos' in pin_data and pin_data['videos']:
-                # Extract video URL
-                video_formats = pin_data['videos'].get('video_list', {})
-                if video_formats:
-                    best_format = max(video_formats.values(), key=lambda x: x.get('width', 0))
-                    return {'url': best_format['url'], 'ext': 'mp4'}
-            
-            # Extract image URL
-            if 'images' in pin_data:
-                images = pin_data['images']
-                if isinstance(images, dict) and 'orig' in images:
-                    return {'url': images['orig']['url'], 'ext': 'jpg'}
+        # Try different patterns for media extraction
+        patterns = [
+            # Pattern 1: New JSON-LD format
+            r'<script type="application/ld\+json">(.*?)</script>',
+            # Pattern 2: Legacy pin data format
+            r'window\.__INITIAL_STATE__\s*=\s*({.*?});?\s*</script>',
+            # Pattern 3: Alternative pin data format
+            r'window\.__PRELOADED_STATE__\s*=\s*({.*?});?\s*</script>'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, response.text, re.DOTALL)
+            for match in matches:
+                try:
+                    data = json.loads(match)
+                    
+                    # Check for video URL in JSON-LD format
+                    if isinstance(data, dict):
+                        if 'video' in data:
+                            if isinstance(data['video'], list):
+                                for video in data['video']:
+                                    if 'contentUrl' in video:
+                                        return {'url': video['contentUrl'], 'ext': 'mp4'}
+                            elif isinstance(data['video'], dict) and 'contentUrl' in data['video']:
+                                return {'url': data['video']['contentUrl'], 'ext': 'mp4'}
+                        
+                        # Check for image URL in JSON-LD format
+                        if 'image' in data:
+                            if isinstance(data['image'], list):
+                                for img in data['image']:
+                                    if isinstance(img, str):
+                                        return {'url': img, 'ext': 'jpg'}
+                                    elif isinstance(img, dict) and 'url' in img:
+                                        return {'url': img['url'], 'ext': 'jpg'}
+                            elif isinstance(data['image'], dict) and 'url' in data['image']:
+                                return {'url': data['image']['url'], 'ext': 'jpg'}
+                            elif isinstance(data['image'], str):
+                                return {'url': data['image'], 'ext': 'jpg'}
+                        
+                        # Check in pin resource response data
+                        if 'resources' in data and 'data' in data['resources']:
+                            pin_data = data['resources']['data']
+                            for key, value in pin_data.items():
+                                if isinstance(value, dict):
+                                    # Check for video
+                                    if 'videos' in value and value['videos']:
+                                        video_formats = value['videos'].get('video_list', {})
+                                        if video_formats:
+                                            best_format = max(video_formats.values(), key=lambda x: x.get('width', 0))
+                                            return {'url': best_format['url'], 'ext': 'mp4'}
+                                    
+                                    # Check for image
+                                    if 'images' in value:
+                                        images = value['images']
+                                        if isinstance(images, dict):
+                                            if 'orig' in images:
+                                                return {'url': images['orig']['url'], 'ext': 'jpg'}
+                                            elif 'max_res' in images:
+                                                return {'url': images['max_res']['url'], 'ext': 'jpg'}
                 
-        return None
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    print(f"Error processing match: {str(e)}")
+                    continue
+        
+        # If we haven't found media URL yet, try direct regex patterns
+        image_patterns = [
+            r'"image_url":"(.*?)"',
+            r'"url":"(https://[^"]*\.(?:jpg|jpeg|png|gif))"',
+            r'content="(https://[^"]*\.(?:jpg|jpeg|png|gif))"'
+        ]
+        
+        video_patterns = [
+            r'"video_url":"(.*?)"',
+            r'"contentUrl":"(https://[^"]*\.(?:mp4|mov))"',
+            r'content="(https://[^"]*\.(?:mp4|mov))"'
+        ]
+        
+        # Try to find video first
+        for pattern in video_patterns:
+            matches = re.findall(pattern, response.text)
+            if matches:
+                return {'url': matches[0].replace('\\/', '/'), 'ext': 'mp4'}
+        
+        # Then try to find image
+        for pattern in image_patterns:
+            matches = re.findall(pattern, response.text)
+            if matches:
+                return {'url': matches[0].replace('\\/', '/'), 'ext': 'jpg'}
+        
+        raise Exception("медиа не найдено на странице")
+        
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        raise Exception("ошибка сети при получении страницы")
     except Exception as e:
         print(f"Pinterest extraction error: {e}")
-        return None
+        raise
 
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
     """Downloads media (audio/video) or playlists from URL using yt-dlp."""
