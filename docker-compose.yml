@@ -3,7 +3,7 @@ version: '3.8'
 services:
   bot:
     build: .
-    command: python src/core/main.py
+    command: python -m src.core.main
     restart: unless-stopped
     volumes:
       - .:/app 
