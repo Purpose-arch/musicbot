@@ -14,8 +14,8 @@ from src.core.bot_instance import bot
 from src.core.config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from src.core.state import download_queues, download_tasks, playlist_downloads
 from src.core.utils import extract_title_and_artist, set_mp3_metadata
-from track_downloader import _blocking_download_and_convert
-from download_queue import process_download_queue
+from .track_downloader import _blocking_download_and_convert
+from .download_queue import process_download_queue
 from src.search.vk_music import parse_playlist_url, get_playlist_tracks
 
 # Disable debug prints and exception stack traces
