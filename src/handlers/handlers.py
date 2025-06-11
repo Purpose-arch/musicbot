@@ -153,15 +153,16 @@ async def process_download_callback(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
-            # Сокращаем сообщение в группах
-            if is_group:
-                status = await callback.message.answer(f"⏳ скачиваю...")
-            else:
-                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+            status = await callback.message.answer(f"⏳ скачиваю...")
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
             await callback.answer("начал скачивание")
+            if is_group:
+                try:
+                    await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+                except Exception as e:
+                    print(f"Warning: Could not delete message: {e}")
     except Exception as e:
         await callback.message.answer(f"❌ ошибка: {e}")
         await callback.answer()
@@ -194,15 +195,16 @@ async def process_download_callback_with_index(callback: types.CallbackQuery):
         if active >= MAX_PARALLEL_DOWNLOADS:
             await callback.answer(f"❌ слишком много загрузок ({active}/{MAX_PARALLEL_DOWNLOADS})", show_alert=True)
         else:
-            # Сокращаем сообщение в группах
-            if is_group:
-                status = await callback.message.answer(f"⏳ скачиваю...")
-            else:
-                status = await callback.message.answer(f"⏳ начинаю скачивать {data['title']} - {data['channel']}")
+            status = await callback.message.answer(f"⏳ скачиваю...")
             download_tasks.setdefault(user, {})
             task = asyncio.create_task(download_track(user, data, callback.message, status, original_message_context=callback.message))
             download_tasks[user][data['url']] = task
             await callback.answer("начал скачивание")
+            if is_group:
+                try:
+                    await bot.delete_message(chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+                except Exception as e:
+                    print(f"Warning: Could not delete message: {e}")
     except Exception as e:
         await callback.answer(f"❌ ошибка: {e}", show_alert=True)
 
@@ -310,8 +312,7 @@ async def handle_media_recognition(message: types.Message):
             recognition_path = original_media_path
 
         # 4. First try: Recognize using Shazam
-        if not is_group:
-            await status_message.edit_text("🔎 распознаю трек...")
+        await status_message.edit_text("🔎 распознаю трек...")
         result = await shazam.recognize(recognition_path)
         track_info = result.get("track", {})
         rec_title = track_info.get("title") or track_info.get("heading", "Unknown Title")
@@ -348,11 +349,7 @@ async def handle_media_recognition(message: types.Message):
                     break
 
             if not first_valid_result:
-                # В группах не отправляем сообщение об ошибке
-                if is_group:
-                    await status_message.delete()
-                else:
-                    await status_message.edit_text(f"❌ не нашлось подходящего трека для скачивания ({rec_artist} - {rec_title}).")
+                await status_message.delete()
                 if original_media_path and os.path.exists(original_media_path):
                     os.remove(original_media_path)
                 temp_dir_obj.cleanup()
@@ -362,10 +359,7 @@ async def handle_media_recognition(message: types.Message):
             logger.info(f"Found track to download: {first_valid_result['title']} from {download_url}")
             
             # В группах сокращаем сообщение
-            if is_group:
-                await status_message.edit_text(f"⏳ скачиваю трек...")
-            else:
-                await status_message.edit_text(f"⏳ скачиваю трек {rec_artist} - {rec_title}...")
+            await status_message.edit_text(f"⏳ скачиваю трек...")
 
             # 6. Download the first result
             loop = asyncio.get_running_loop()
@@ -461,11 +455,7 @@ async def handle_media_recognition(message: types.Message):
                 )
             else:
                 # Both Shazam and transcription failed
-                # В группах не отправляем сообщение об ошибке
-                if is_group:
-                    await status_message.delete()
-                else:
-                    await status_message.edit_text("❌ не удалось распознать трек и транскрипция не удалась.")
+                await status_message.delete()
                 if original_media_path and os.path.exists(original_media_path):
                     os.remove(original_media_path)
                 temp_dir_obj.cleanup()

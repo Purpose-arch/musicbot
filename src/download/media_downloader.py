@@ -203,11 +203,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 'tracks': processed
             }
             
-            # Сокращаем сообщение в группах
-            if is_group:
-                await bot.edit_message_text(f"⏳ скачиваю плейлист '{playlist_title}' ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
-            else:
-                await bot.edit_message_text(f"⏳ найден плейлист '{playlist_title}' ({total} треков), скоро скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            await bot.edit_message_text(f"⏳ скачиваю плейлист '{playlist_title}' ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
 
             # queue tracks
             download_queues.setdefault(user_id,[])
@@ -223,11 +219,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # single media
         print(f"[URL] Single media download for: {url}")
         try:
-            # Сокращаем сообщение в группах
-            if is_group:
-                await bot.edit_message_text(f"⏳ скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
-            else:
-                await bot.edit_message_text(f"⏳ качаю медиа", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            await bot.edit_message_text(f"⏳ скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
         except: pass
 
         # download
@@ -256,10 +248,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # send
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
         
-        # В группах не показываем промежуточное сообщение об отправке
-        if not is_group:
-            send_msg = await original_message.answer("📤 отправляю медиа")
-            
         ext = os.path.splitext(actual_downloaded_path)[1].lower()
         if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
             if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
@@ -275,10 +263,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         else:
             await original_message.answer_document(FSInputFile(actual_downloaded_path))
             
-        # Удаляем промежуточное сообщение только если оно было создано (не в группах)
-        if not is_group and locals().get('send_msg'):
-            try: await bot.delete_message(chat_id=send_msg.chat.id, message_id=send_msg.message_id)
-            except: pass
 
     except Exception as e:
         print(f"[URL] ERROR: {e}")

@@ -133,12 +133,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             if not is_playlist_track:
                 try:
                     if original_status_message_id:
-                        if is_group:
-                            await bot.edit_message_text("⏳ мгновенная загрузка из VK...", 
-                                                     chat_id=chat_id_for_updates, 
-                                                     message_id=original_status_message_id)
-                        else:
-                            await bot.edit_message_text(f"⏳ мгновенная загрузка {title} - {artist} из VK...", 
+                        await bot.edit_message_text(f"⏳ мгновенная загрузка {title} - {artist} из VK...", 
                                                      chat_id=chat_id_for_updates, 
                                                      message_id=original_status_message_id)
                 except Exception as e:
@@ -202,10 +197,6 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
 
                         ctx = callback_message or original_message_context
                         if ctx:
-                            # В группах сокращаем сообщения
-                            if not is_group:
-                                snd = await ctx.answer("📤 отправляю трек")
-                            
                             # Send audio and capture the message using original metadata
                             audio_msg = await bot.send_audio(
                                 chat_id_for_updates,
@@ -214,10 +205,6 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                                 performer=original_artist # Changed to use original_artist
                             )
                             
-                            # Delete the temporary status message только в личных чатах
-                            if not is_group and locals().get('snd'):
-                                await bot.delete_message(snd.chat.id, snd.message_id)
-                                
                             # Send lyrics if found (даже в группах)
                             if lyrics:
                                 await bot.send_message(
@@ -344,10 +331,6 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
 
                 ctx = callback_message or original_message_context
                 if ctx:
-                    # В группах сокращаем сообщения
-                    if not is_group:
-                        snd = await ctx.answer("📤 отправляю трек")
-                    
                     # Send audio and capture the message using original metadata
                     audio_msg = await bot.send_audio(
                         chat_id_for_updates,
@@ -356,10 +339,6 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                         performer=original_artist # Changed to use original_artist
                     )
                     
-                    # Delete the temporary status message только в личных чатах
-                    if not is_group and locals().get('snd'):
-                        await bot.delete_message(snd.chat.id, snd.message_id)
-                        
                     # Send lyrics if found (даже в группах)
                     if lyrics:
                         await bot.send_message(
