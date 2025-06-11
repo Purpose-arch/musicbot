@@ -6,9 +6,9 @@ import builtins
 print = lambda *args, **kwargs: None
 traceback.print_exc = lambda *args, **kwargs: None
 
-from config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
-from utils import extract_title_and_artist
-from vk_music import get_vk_service
+from src.core.config import YDL_AUDIO_OPTS, MIN_SONG_DURATION, MAX_SONG_DURATION
+from src.core.utils import extract_title_and_artist
+from src.search.vk_music import get_vk_service
 
 async def search_soundcloud(query, max_results=50):
     """Searches SoundCloud using yt-dlp"""

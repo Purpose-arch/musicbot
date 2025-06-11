@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копируем остальной код приложения в рабочую директорию
-COPY . .
+COPY . /app
 
 # Указываем команду для запуска бота при старте контейнера
-CMD ["python", "main.py"] 
+CMD ["python", "src/core/main.py"] 

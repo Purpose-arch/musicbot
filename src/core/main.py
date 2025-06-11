@@ -1,6 +1,6 @@
 import asyncio
-from bot_instance import bot, dp
-import handlers  # register handlers
+from src.core.bot_instance import bot, dp
+import src.handlers # register handlers # noqa: F401
 
 async def main():
     await dp.start_polling(bot)

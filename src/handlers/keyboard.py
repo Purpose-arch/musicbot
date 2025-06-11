@@ -3,7 +3,7 @@ import math
 import base64
 import json
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import TRACKS_PER_PAGE, GROUP_TRACKS_PER_PAGE
+from src.core.config import TRACKS_PER_PAGE, GROUP_TRACKS_PER_PAGE
 
 def create_tracks_keyboard(tracks, page=0, search_id="", is_group=False):
     """Генерация инлайн-клавиатуры для списка треков"""

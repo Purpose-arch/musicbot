@@ -13,18 +13,18 @@ from aiogram.types import FSInputFile
 from aiogram import F, types
 from aiogram.filters import Command
 
-from bot_instance import dp, bot, ADMIN_ID
-from config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS, LOG_GROUP_ID
-from state import search_results, download_tasks, download_queues, playlist_downloads
-from search import search_soundcloud, search_vk
-from keyboard import create_tracks_keyboard
-from track_downloader import download_track, _blocking_download_and_convert
-from media_downloader import download_media_from_url
-from download_queue import process_download_queue
-from music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_lyrics_parallel
-from utils import set_mp3_metadata
-from transcription import process_voice_or_video
-from group_logger import send_log_message
+from src.core.bot_instance import dp, bot, ADMIN_ID
+from src.core.config import TRACKS_PER_PAGE, MAX_TRACKS, GROUP_TRACKS_PER_PAGE, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS, YDL_AUDIO_OPTS, LOG_GROUP_ID
+from src.core.state import search_results, download_tasks, download_queues, playlist_downloads
+from src.search.search import search_soundcloud, search_vk
+from src.handlers.keyboard import create_tracks_keyboard
+from src.download.track_downloader import download_track, _blocking_download_and_convert
+from src.download.media_downloader import download_media_from_url
+from src.download.download_queue import process_download_queue
+from src.recognition.music_recognition import shazam, search_genius, search_yandex_music, search_musicxmatch, search_lyrics_parallel
+from src.core.utils import set_mp3_metadata
+from src.recognition.transcription import process_voice_or_video
+from src.logger.group_logger import send_log_message
 
 logger = logging.getLogger(__name__)
 
@@ -434,7 +434,7 @@ async def handle_media_recognition(message: types.Message):
                 await status_message.edit_text("🔍 распознавание не удалось, пробую транскрипцию...")
             
             # Get deepgram API key from config
-            from config import DEEPGRAM_API_KEY
+            from src.core.config import DEEPGRAM_API_KEY
             
             # Process voice or video with transcription
             transcription = await process_voice_or_video(

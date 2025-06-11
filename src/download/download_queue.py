@@ -1,8 +1,8 @@
 # download_queue.py
 import asyncio
 
-from state import download_queues, download_tasks, playlist_downloads
-from config import MAX_PARALLEL_DOWNLOADS
+from src.core.state import download_queues, download_tasks, playlist_downloads
+from src.core.config import MAX_PARALLEL_DOWNLOADS
 
 async def process_download_queue(user_id):
     # local import to avoid circular dependency

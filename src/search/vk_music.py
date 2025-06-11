@@ -3,7 +3,7 @@ import sys
 import re
 from pathlib import Path
 from vkpymusic import TokenReceiver, Service
-from config import VK_LOGIN, VK_PASSWORD
+from src.core.config import VK_LOGIN, VK_PASSWORD
 
 # Получаем корневую директорию проекта
 ROOT_DIR = Path(__file__).parent.absolute()

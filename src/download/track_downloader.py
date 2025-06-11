@@ -14,11 +14,11 @@ import yt_dlp
 from aiogram.types import FSInputFile
 from mutagen.mp3 import MP3
 
-from bot_instance import bot
-from config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
-from state import download_tasks, download_queues, playlist_downloads
-from utils import set_mp3_metadata
-from music_recognition import shazam, search_lyrics_parallel
+from src.core.bot_instance import bot
+from src.core.config import MAX_PARALLEL_DOWNLOADS, GROUP_MAX_TRACKS
+from src.core.state import download_tasks, download_queues, playlist_downloads
+from src.core.utils import set_mp3_metadata
+from src.recognition.music_recognition import shazam, search_lyrics_parallel
 
 
 def _blocking_download_and_convert(url, download_opts):
@@ -122,7 +122,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
                     print(f"Warning: Could not remove existing file {expected_mp3}: {e}")
             
             # Импортируем модуль vk_music для прямого скачивания
-            from vk_music import download_track as vk_download_track
+            from src.search.vk_music import download_track as vk_download_track
             
             # Выполняем прямое скачивание трека из VK
             # Это блокирующая операция, выполняем ее в executor
