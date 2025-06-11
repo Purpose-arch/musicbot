@@ -24,4 +24,4 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . /app
 
 # Указываем команду для запуска бота при старте контейнера
-CMD ["python", "src/core/main.py"] 
+CMD ["python", "-m", "src.core.main"] 
