@@ -1,6 +1,0 @@
-# nixpacks.toml
-# Конфигурация для Railway Nixpacks builder
-
-# Команда для запуска приложения
-[start]
-cmd = "python src/core/main.py"
