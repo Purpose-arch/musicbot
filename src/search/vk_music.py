@@ -6,7 +6,7 @@ from vkpymusic import TokenReceiver, Service
 from src.core.config import VK_LOGIN, VK_PASSWORD
 
 # Получаем корневую директорию проекта
-ROOT_DIR = Path(__file__).parent.absolute()
+ROOT_DIR = Path(__file__).parent.parent.parent.absolute()
 
 def get_vk_service():
     """Возвращает авторизованный сервис VK, используя конфиг из корневой директории проекта."""
