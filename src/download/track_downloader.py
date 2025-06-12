@@ -376,7 +376,7 @@ async def download_track(user_id, track_data, callback_message=None, status_mess
             active = sum(1 for t in download_tasks.get(user_id, {}).values() if not t.done())
             if active < MAX_PARALLEL_DOWNLOADS:
                 # local import to avoid circular dependency
-                from download_queue import process_download_queue
+                from .download_queue import process_download_queue
                 asyncio.create_task(process_download_queue(user_id))
 
 async def send_completed_playlist(playlist_download_id):
