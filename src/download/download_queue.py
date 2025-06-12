@@ -6,7 +6,7 @@ from src.core.config import MAX_PARALLEL_DOWNLOADS
 
 async def process_download_queue(user_id):
     # local import to avoid circular dependency
-    from track_downloader import download_track
+    from .track_downloader import download_track
     """Обработка очереди загрузок для пользователя"""
     while download_queues[user_id] and len(download_tasks[user_id]) < MAX_PARALLEL_DOWNLOADS:
         queue_item = download_queues[user_id].pop(0)
