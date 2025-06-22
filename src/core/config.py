@@ -44,3 +44,6 @@ LOG_GROUP_ID = os.getenv('LOG_GROUP_ID')
 
 # API ключ для транскрипции аудио через Deepgram
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
+
+WEB_APP_URL = os.getenv('WEB_APP_URL')
+PORT = int(os.getenv('PORT', 8080)) # Default to 8080 if not set
