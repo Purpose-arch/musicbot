@@ -6,7 +6,7 @@ import traceback
 import logging
 import re
 
-import yt_dlp
+import yt_dlp # NEW
 from aiogram import types
 from aiogram.types import FSInputFile
 
@@ -14,9 +14,10 @@ from src.core.bot_instance import bot
 from src.core.config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
 from src.core.state import download_queues, download_tasks, playlist_downloads
 from src.core.utils import extract_title_and_artist, set_mp3_metadata
-from .track_downloader import _blocking_download_and_convert
+# DEPRECATED: from .track_downloader import _blocking_download_and_convert
 from .download_queue import process_download_queue
 from src.search.vk_music import parse_playlist_url, get_playlist_tracks
+from src.download.cobalt_api import AsyncCobaltDownloader
 
 # Disable debug prints and exception stack traces
 logger = logging.getLogger(__name__)
@@ -126,23 +127,23 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             await bot.edit_message_text(f"❌ ошибка при обработке плейлиста/альбома ВКонтакте: {str(e)}", chat_id=status_message.chat.id, message_id=status_message.message_id)
             return
 
-    # media download options
-    media_opts = {
-        'format': 'bestvideo+bestaudio/best/bestaudio',
-        'outtmpl': base_temp_path + '.%(ext)s',
-        'quiet': False,
-        'verbose': True,
-        'no_warnings': False,
-        'prefer_ffmpeg': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': True,
-        'extract_flat': False,
-        'ffmpeg_location': '/usr/bin/ffmpeg',
-        'merge_output_format': 'mp4',
-    }
+    # DEPRECATED: media download options
+    # media_opts = {
+    #     'format': 'bestvideo+bestaudio/best/bestaudio',
+    #     'outtmpl': base_temp_path + '.%(ext)s',
+    #     'quiet': False,
+    #     'verbose': True,
+    #     'no_warnings': False,
+    #     'prefer_ffmpeg': True,
+    #     'nocheckcertificate': True,
+    #     'ignoreerrors': True,
+    #     'extract_flat': False,
+    #     'ffmpeg_location': '/usr/bin/ffmpeg',
+    #     'merge_output_format': 'mp4',
+    # }
 
     try:
-        # extract info
+        # extract info using yt-dlp
         extracted_info = None
         print(f"[URL] Extracting info for: {url}")
         try:
@@ -163,8 +164,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 await bot.edit_message_text(f"❌ плейлист {playlist_title} пуст", chat_id=status_message.chat.id, message_id=status_message.message_id)
                 return
 
-            # prepare tracks
-            processed = []
+            # prepare tracks for Cobalt API multi-download
+            track_urls_to_download = []
+            processed_tracks_info = []
             for idx, e in enumerate(entries):
                 if not e:
                     continue
@@ -173,47 +175,105 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 artist = e.get('uploader', 'Unknown Artist')
                 if not entry_url or not title:
                     continue
-                # simple extraction
-                title_extracted, artist_extracted = extract_title_and_artist(title)
-                # override only if a valid artist was extracted
-                if artist_extracted and artist_extracted != "Unknown Artist":
-                    title = title_extracted
-                    artist = artist_extracted
-                processed.append({'original_index': idx, 'url': entry_url, 'title': title, 'artist': artist, 'status':'pending','file_path':None,'source':e.get('ie_key','')})
-
-            # Используем разные лимиты для групп и личных чатов
-            max_tracks = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
+                track_urls_to_download.append(entry_url)
+                processed_tracks_info.append({
+                    'original_index': idx,
+                    'url': entry_url,
+                    'title': title,
+                    'artist': artist,
+                    'status': 'pending',
+                    'file_path': None,
+                    'source': e.get('ie_key', '')
+                })
             
-            total = len(processed)
+            max_tracks = GROUP_MAX_TRACKS if is_group else MAX_TRACKS
+            total = len(processed_tracks_info)
             if total == 0:
                 await bot.edit_message_text(f"❌ нет треков для {playlist_title}", chat_id=status_message.chat.id, message_id=status_message.message_id)
                 return
             if total > max_tracks:
-                processed = processed[:max_tracks]; total = max_tracks
-
-            # add to playlist_downloads
+                processed_tracks_info = processed_tracks_info[:max_tracks]
+                track_urls_to_download = track_urls_to_download[:max_tracks]
+                total = max_tracks
+            
             playlist_downloads[playlist_id] = {
                 'user_id': user_id,
                 'chat_id': original_message.chat.id,
-                'chat_type': original_message.chat.type,  # Сохраняем тип чата
+                'chat_type': original_message.chat.type,
                 'status_message_id': status_message.message_id,
                 'playlist_title': playlist_title,
                 'total_tracks': total,
                 'completed_tracks': 0,
-                'tracks': processed
+                'tracks': processed_tracks_info
             }
-            
-            await bot.edit_message_text(f"⏳ скачиваю плейлист '{playlist_title}' ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
 
-            # queue tracks
-            download_queues.setdefault(user_id,[])
-            for t in processed:
-                download_queues[user_id].append(({'title':t['title'],'channel':t['artist'],'url':t['url'],'source':t['source']},playlist_id))
-            # trigger queue
-            if user_id not in download_tasks: download_tasks[user_id]={}
-            active = sum(1 for t in download_tasks[user_id].values() if not t.done())
-            if active < MAX_PARALLEL_DOWNLOADS:
-                asyncio.create_task(process_download_queue(user_id))
+            await bot.edit_message_text(f"⏳ скачиваю плейлист '{playlist_title}' ({total} треков)", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            
+            # Initialize CobaltDownloader for playlist download
+            cobalt_downloader = AsyncCobaltDownloader(temp_dir=temp_dir)
+
+            # Define progress callback for multiple downloads
+            async def multi_progress_callback(track_url: str, percent: int):
+                # Find the track in playlist_downloads and update its status/progress
+                for track_info in playlist_downloads[playlist_id]['tracks']:
+                    if track_info['url'] == track_url:
+                        if percent == 100: # Mark as completed
+                            track_info['status'] = 'completed'
+                            playlist_downloads[playlist_id]['completed_tracks'] += 1
+                        else:
+                            track_info['status'] = f'downloading {percent}%'
+                        break
+                
+                # Update the status message for the playlist
+                completed = playlist_downloads[playlist_id]['completed_tracks']
+                total_tracks = playlist_downloads[playlist_id]['total_tracks']
+                await bot.edit_message_text(
+                    f"⏳ скачиваю плейлист '{playlist_title}' ({completed}/{total_tracks} треков, {track_url} {percent}%)", 
+                    chat_id=status_message.chat.id, 
+                    message_id=status_message.message_id
+                )
+
+            # Download multiple tracks using Cobalt API
+            downloaded_paths = await cobalt_downloader.download_multiple(
+                track_urls_to_download, 
+                progress_callback=multi_progress_callback
+            )
+            
+            await cobalt_downloader._close_session()
+
+            # Process downloaded files
+            for idx, file_path in enumerate(downloaded_paths):
+                track_info = playlist_downloads[playlist_id]['tracks'][idx]
+                if file_path:
+                    track_info['file_path'] = file_path
+                    # Send the file after download
+                    ext = os.path.splitext(file_path)[1].lower()
+                    # Get title and artist for metadata from the processed_tracks_info
+                    title_for_meta = track_info['title']
+                    artist_for_meta = track_info['artist']
+
+                    if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
+                        if ext == '.mp3': set_mp3_metadata(file_path, title_for_meta, artist_for_meta)
+                        await original_message.answer_audio(
+                            FSInputFile(file_path),
+                            title=title_for_meta,
+                            performer=artist_for_meta
+                        )
+                    elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
+                        await original_message.answer_photo(FSInputFile(file_path))
+                    elif ext in ['.mp4','.mkv','.webm','.mov','.avi']:
+                        await original_message.answer_video(FSInputFile(file_path))
+                    else:
+                        await original_message.answer_document(FSInputFile(file_path))
+                    
+                    # Clean up the downloaded file
+                    try: os.remove(file_path)
+                    except: pass
+                else:
+                    print(f"[URL] Failed to download track: {track_info['url']}")
+                    track_info['status'] = 'failed'
+
+            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             return
 
         # single media
@@ -222,17 +282,35 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             await bot.edit_message_text(f"⏳ скачиваю...", chat_id=status_message.chat.id, message_id=status_message.message_id)
         except: pass
 
-        # download
-        await loop.run_in_executor(None, _blocking_download_and_convert, url, media_opts)
+        # Initialize CobaltDownloader
+        # Using temp_dir from the current context for AsyncCobaltDownloader
+        cobalt_downloader = AsyncCobaltDownloader(temp_dir=temp_dir)
+        
+        # Define synchronous progress callback that creates an async task for bot message update
+        def progress_callback(percent: int):
+            asyncio.create_task(bot.edit_message_text(
+                f"⏳ скачиваю... {percent}%", 
+                chat_id=status_message.chat.id, 
+                message_id=status_message.message_id
+            ))
 
-        # find file
-        exts = ['.mp4','.mkv','.webm','.mov','.avi','.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']
-        for ext in exts:
-            p = base_temp_path + ext
-            if os.path.exists(p) and os.path.getsize(p)>0:
-                actual_downloaded_path = p; break
+        # Download using Cobalt API
+        actual_downloaded_path = await cobalt_downloader.download_media(
+            url, 
+            progress_callback=progress_callback
+        )
+        
+        # Close the session after download
+        await cobalt_downloader._close_session()
+
+        # DEPRECATED: find file logic (download_media returns the path)
+        # exts = ['.mp4','.mkv','.webm','.mov','.avi','.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']
+        # for ext in exts:
+        #     p = base_temp_path + ext
+        #     if os.path.exists(p) and os.path.getsize(p)>0:
+        #         actual_downloaded_path = p; break
         if not actual_downloaded_path:
-            raise Exception(f"не найден файл после скачивания {url}")
+            raise Exception(f"не удалось скачать файл с помощью Cobalt API для {url}")
 
         # size check
         size = os.path.getsize(actual_downloaded_path)
@@ -241,9 +319,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             raise Exception(f"слишком большой файл {mb:.1f}МБ (лимит 50)")
 
         # metadata
-        title = extracted_info.get('title') if extracted_info else 'media'
-        safe_title,_ = extract_title_and_artist(title)
-        performer = extracted_info.get('uploader') if extracted_info else None
+        # Since Cobalt API does not provide rich metadata, we derive it from the filename
+        file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
+        safe_title, performer = extract_title_and_artist(file_name_without_ext)
 
         # send
         await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
