@@ -6,6 +6,7 @@ vkpymusic
 mutagen
 httpx
 aiohttp
+aiohttp_socks
 yt-dlp
 ffmpeg-python
 shazamio
