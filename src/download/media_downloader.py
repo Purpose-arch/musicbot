@@ -221,14 +221,14 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                             track_info['status'] = 'completed'
                             playlist_downloads[playlist_id]['completed_tracks'] += 1
                         else:
-                            track_info['status'] = f'downloading {percent}%'
+                            track_info['status'] = 'downloading'
                         break
                 
                 # Update the status message for the playlist
                 completed = playlist_downloads[playlist_id]['completed_tracks']
                 total_tracks = playlist_downloads[playlist_id]['total_tracks']
                 await bot.edit_message_text(
-                    f"⏳ скачиваю плейлист '{playlist_title}' ({completed}/{total_tracks} треков, {track_url} {percent}%)", 
+                    f"⏳ скачиваю плейлист '{playlist_title}' ({completed}/{total_tracks} треков)",
                     chat_id=status_message.chat.id, 
                     message_id=status_message.message_id
                 )
@@ -289,7 +289,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Define synchronous progress callback that creates an async task for bot message update
         def progress_callback(percent: int):
             asyncio.create_task(bot.edit_message_text(
-                f"⏳ скачиваю... {percent}%", 
+                f"⏳ скачиваю...",
                 chat_id=status_message.chat.id, 
                 message_id=status_message.message_id
             ))
