@@ -283,21 +283,17 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         except: pass
 
         # Initialize CobaltDownloader
-        # Using temp_dir from the current context for AsyncCobaltDownloader
         cobalt_downloader = AsyncCobaltDownloader(temp_dir=temp_dir)
         
-        # Define synchronous progress callback that creates an async task for bot message update
-        def progress_callback(percent: int):
-            asyncio.create_task(bot.edit_message_text(
-                f"⏳ скачиваю...",
-                chat_id=status_message.chat.id, 
-                message_id=status_message.message_id
-            ))
+        # DEPRECATED: progress_callback was causing too many API calls and errors, and is no longer needed.
+        # def progress_callback(percent: int):
+        #     pass
 
         # Download using Cobalt API
         actual_downloaded_path = await cobalt_downloader.download_media(
             url, 
-            progress_callback=progress_callback
+            # DEPRECATED: progress_callback argument removed as the function is no longer needed.
+            # progress_callback=progress_callback
         )
         
         # Close the session after download
