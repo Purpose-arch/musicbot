@@ -14,3 +14,4 @@ musicxmatch-api
 lyricsgenius
 yandex-music
 deepgram-sdk
+telethon
