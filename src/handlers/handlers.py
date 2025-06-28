@@ -28,9 +28,6 @@ from src.logger.group_logger import send_log_message
 
 logger = logging.getLogger(__name__)
 
-# Переменная для хранения ID бота, будет инициализирована при первом получении
-BOT_USER_ID = None
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Notify admin about start action
@@ -230,93 +227,6 @@ async def process_page_callback(callback: types.CallbackQuery):
 @dp.callback_query(F.data=="info")
 async def process_info_callback(callback: types.CallbackQuery):
     await callback.answer()
-
-@dp.message(F.from_user.id == F.bot.id, F.caption.regexp(r'^{', re.DOTALL))
-async def handle_agent_message(message: types.Message):
-    global BOT_USER_ID
-    if BOT_USER_ID is None:
-        bot_info = await bot.get_me()
-        BOT_USER_ID = bot_info.id
-    
-    # Проверяем, что сообщение действительно от нашего бота (т.е. от агента, отправленного боту)
-    if message.from_user.id != BOT_USER_ID:
-        return # Это не сообщение от агента
-
-    try:
-        # Парсим метаданные из caption
-        caption_data = json.loads(message.caption)
-        original_chat_id = caption_data.get('user_chat_id')
-        status_message_id = caption_data.get('status_message_id')
-        media_type = caption_data.get('media_type')
-        title = caption_data.get('title')
-        performer = caption_data.get('performer')
-        duration = caption_data.get('duration')
-
-        file_id = None
-        if message.audio:
-            file_id = message.audio.file_id
-        elif message.video:
-            file_id = message.video.file_id
-        elif message.photo:
-            file_id = message.photo[-1].file_id # Берем последнее (самое большое) фото
-        elif message.document:
-            file_id = message.document.file_id
-        
-        if not file_id or not original_chat_id or not status_message_id or not media_type:
-            print(f"[AGENT_HANDLER] Неполные данные в сообщении от агента: {message.caption}")
-            return
-
-        # Удаляем статусное сообщение в чате пользователя
-        try:
-            await bot.delete_message(chat_id=original_chat_id, message_id=status_message_id)
-        except Exception as e:
-            print(f"[AGENT_HANDLER] Не удалось удалить статусное сообщение {status_message_id} в чате {original_chat_id}: {e}")
-        
-        # Пересылаем файл пользователю
-        if media_type == 'audio':
-            await bot.send_audio(
-                original_chat_id, 
-                file_id, 
-                title=title, 
-                performer=performer, 
-                duration=duration
-            )
-        elif media_type == 'video':
-            await bot.send_video(
-                original_chat_id, 
-                file_id, 
-                caption=title, # Используем title как caption для видео
-                duration=duration
-            )
-        elif media_type == 'photo':
-            await bot.send_photo(
-                original_chat_id, 
-                file_id, 
-                caption=title # Используем title как caption для фото
-            )
-        else: # document
-            await bot.send_document(
-                original_chat_id, 
-                file_id, 
-                caption=title # Используем title как caption для документа
-            )
-        
-        # Удаляем сообщение, которое агент отправил боту, для очистки чата бота
-        try:
-            await message.delete()
-        except Exception as e:
-            print(f"[AGENT_HANDLER] Не удалось удалить сообщение агента {message.message_id}: {e}")
-
-    except json.JSONDecodeError:
-        print(f"[AGENT_HANDLER] Caption не является JSON: {message.caption}")
-        # Это может быть обычное сообщение, не от агента. Проигнорируем.
-        pass
-    except Exception as e:
-        print(f"[AGENT_HANDLER] Общая ошибка в обработчике агента: {e}")
-        # Отправляем сообщение об ошибке пользователю, если возможно
-        try:
-            await bot.send_message(original_chat_id, f"❌ ошибка при пересылке файла: {e}")
-        except: pass
 
 @dp.message((F.voice | F.audio | F.video_note))
 async def handle_media_recognition(message: types.Message):
@@ -579,6 +489,102 @@ async def handle_media_recognition(message: types.Message):
         if temp_dir and os.path.exists(temp_dir):
              try: temp_dir_obj.cleanup()
              except Exception as e: logger.warning(f"Could not cleanup temporary directory {temp_dir}: {e}")
+
+@dp.message(F.caption)
+async def handle_telethon_agent_file(message: types.Message):
+    """Handles files received from the Telethon agent and forwards them to the original user."""
+    # Check if the caption contains the metadata from the Telethon agent
+    if message.caption and message.caption.startswith('{') and message.caption.endswith('}'):
+        try:
+            metadata = json.loads(message.caption)
+            if metadata.get("source_type") == "telethon_agent":
+                logger.info(f"Received file from Telethon agent. Metadata: {metadata}")
+
+                original_chat_id = metadata.get("original_chat_id")
+                original_message_id = metadata.get("original_message_id")
+                status_message_id = metadata.get("status_message_id")
+                file_type = metadata.get("file_type")
+                title = metadata.get("title")
+                performer = metadata.get("performer")
+                duration = metadata.get("duration", 0)
+
+                if not (original_chat_id and file_type):
+                    logger.error(f"Missing required metadata from Telethon agent: {metadata}")
+                    return
+
+                file_id = None
+                if message.audio:
+                    file_id = message.audio.file_id
+                elif message.video:
+                    file_id = message.video.file_id
+                elif message.photo:
+                    file_id = message.photo[-1].file_id # Get the largest photo
+                elif message.document:
+                    file_id = message.document.file_id
+
+                if not file_id:
+                    logger.error(f"Could not get file_id from message from Telethon agent. Message: {message}")
+                    return
+
+                # Delete the original status message from download_media_from_url
+                try:
+                    if status_message_id and original_chat_id: # original_chat_id here is the chat where the status message was sent
+                        await bot.delete_message(chat_id=original_chat_id, message_id=status_message_id)
+                except Exception as e:
+                    logger.warning(f"Could not delete status message {status_message_id} in chat {original_chat_id}: {e}")
+
+                # Send the file to the original user
+                try:
+                    if file_type == "audio":
+                        await bot.send_audio(
+                            chat_id=original_chat_id,
+                            audio=file_id,
+                            title=title,
+                            performer=performer,
+                            duration=duration,
+                            reply_to_message_id=original_message_id if original_message_id else None
+                        )
+                    elif file_type == "video":
+                        await bot.send_video(
+                            chat_id=original_chat_id,
+                            video=file_id,
+                            caption=title, # Video caption
+                            reply_to_message_id=original_message_id if original_message_id else None
+                        )
+                    elif file_type == "photo":
+                        await bot.send_photo(
+                            chat_id=original_chat_id,
+                            photo=file_id,
+                            caption=title, # Photo caption
+                            reply_to_message_id=original_message_id if original_message_id else None
+                        )
+                    elif file_type == "document":
+                        await bot.send_document(
+                            chat_id=original_chat_id,
+                            document=file_id,
+                            caption=title, # Document caption
+                            reply_to_message_id=original_message_id if original_message_id else None
+                        )
+                    logger.info(f"Successfully resent file from agent to chat {original_chat_id}.")
+
+                    # Delete the agent's message after successful re-sending to keep bot's chat clean
+                    try:
+                        await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+                    except Exception as e:
+                        logger.warning(f"Could not delete agent's message {message.message_id} in chat {message.chat.id}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Error re-sending file from Telethon agent to {original_chat_id}: {e}", exc_info=True)
+                    try:
+                        # Notify the original user about the error
+                        await bot.send_message(original_chat_id, f"❌ Ошибка при отправке файла: {e}")
+                    except: pass # If cannot even send error message, just log it.
+
+        except json.JSONDecodeError:
+            # Not a JSON caption from our agent, ignore.
+            pass
+        except Exception as e:
+            logger.error(f"Unexpected error in handle_telethon_agent_file: {e}", exc_info=True)
 
 @dp.message(F.text)
 async def handle_text(message: types.Message):

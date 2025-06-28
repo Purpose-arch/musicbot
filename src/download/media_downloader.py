@@ -6,21 +6,12 @@ import traceback
 import logging
 import re
 import subprocess
-import json
 import sys
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3NoHeaderError
-from mutagen.mp4 import MP4
-from mutagen.ogg import OggFile
-from mutagen.flac import FLAC
-from mutagen.wavpack import WavPack
-from mutagen.aiff import AIFF
-from mutagen.asf import ASF
-from mutagen.trueaudio import TrueAudio
 
 import yt_dlp # NEW
 from aiogram import types
 from aiogram.types import FSInputFile
+# DEPRECATED: from mutagen.ogg import OggFile # This import is causing ImportError and is not used
 
 from src.core.bot_instance import bot
 from src.core.config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
@@ -36,6 +27,9 @@ logger = logging.getLogger(__name__)
 print = lambda *args, **kwargs: None
 traceback.print_exc = lambda *args, **kwargs: None
 
+# Constants for Telethon agent
+TELETHON_THRESHOLD_MB = 48 # Files larger than this will be handled by Telethon agent
+
 async def download_media_from_url(url: str, original_message: types.Message, status_message: types.Message):
     """Downloads media (audio/video) or playlists from URL using yt-dlp."""
     loop = asyncio.get_running_loop()
@@ -46,6 +40,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
     base_temp_path = os.path.join(temp_dir, f"media_{download_uuid}")
     actual_downloaded_path = None
     temp_path = None
+    telethon_agent_used = False # NEW
 
     # Check if URL is a VK playlist or album
     # Ссылки на плейлисты: https://vk.com/music/playlist/123_456_hash
@@ -297,136 +292,75 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         # Initialize CobaltDownloader
         cobalt_downloader = AsyncCobaltDownloader(temp_dir=temp_dir)
         
-        # DEPRECATED: progress_callback was causing too many API calls and errors, and is no longer needed.
-        # def progress_callback(percent: int):
-        #     pass
-
         # Download using Cobalt API
         actual_downloaded_path = await cobalt_downloader.download_media(
             url, 
-            # DEPRECATED: progress_callback argument removed as the function is no longer needed.
-            # progress_callback=progress_callback
         )
         
         # Close the session after download
         await cobalt_downloader._close_session()
 
-        # DEPRECATED: find file logic (download_media returns the path)
-        # exts = ['.mp4','.mkv','.webm','.mov','.avi','.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']
-        # for ext in exts:
-        #     p = base_temp_path + ext
-        #     if os.path.exists(p) and os.path.getsize(p)>0:
-        #         actual_downloaded_path = p; break
         if not actual_downloaded_path:
             raise Exception(f"не удалось скачать файл с помощью Cobalt API для {url}")
-
-        # Определяем размер файла
-        size = os.path.getsize(actual_downloaded_path)
-        
-        # Порог для больших файлов (Telegram Bot API limit is 50MB, so we set a bit lower)
-        LARGE_FILE_THRESHOLD = 48 * 1024 * 1024 # 48 MB
-
-        # Если файл слишком большой, используем Telethon агент
-        if size > LARGE_FILE_THRESHOLD:
-            print(f"[URL] Файл слишком большой ({size / (1024*1024):.2f} MB), использую Telethon агент...")
-            await bot.edit_message_text("⏳ файл слишком большой, отправляю через агента...", chat_id=status_message.chat.id, message_id=status_message.message_id)
-
-            # Определение типа медиа и метаданных для агента
-            ext = os.path.splitext(actual_downloaded_path)[1].lower()
-            media_type = 'document'
-            title_for_meta = None
-            performer_for_meta = None
-            duration_for_meta = 0
-
-            if ext in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']:
-                media_type = 'audio'
-                file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
-                title_for_meta, performer_for_meta = extract_title_and_artist(file_name_without_ext)
-                # Получаем продолжительность аудио с помощью mutagen
-                try:
-                    audio_info = None
-                    if ext == '.mp3': audio_info = MP3(actual_downloaded_path)
-                    elif ext == '.m4a': audio_info = MP4(actual_downloaded_path)
-                    elif ext == '.ogg' or ext == '.opus': audio_info = OggFile(actual_downloaded_path)
-                    elif ext == '.flac': audio_info = FLAC(actual_downloaded_path)
-                    elif ext == '.wav': audio_info = WavPack(actual_downloaded_path) # WavPack for .wav (or use wave module directly)
-                    elif ext == '.aiff': audio_info = AIFF(actual_downloaded_path)
-                    elif ext == '.wma' or ext == '.wmv': audio_info = ASF(actual_downloaded_path)
-                    elif ext == '.tta': audio_info = TrueAudio(actual_downloaded_path)
-
-                    if audio_info and audio_info.info.length:
-                        duration_for_meta = int(audio_info.info.length)
-                        # Если title/performer не были извлечены из имени файла, попробуем из метаданных
-                        if not title_for_meta and hasattr(audio_info.tags, 'title'): title_for_meta = str(audio_info.tags['title'][0])
-                        if not performer_for_meta and hasattr(audio_info.tags, 'artist'): performer_for_meta = str(audio_info.tags['artist'][0])
-                except ID3NoHeaderError: # Для MP3 без ID3 тегов
-                    pass
-                except Exception as e:
-                    print(f"[URL] Ошибка чтения аудио метаданных с mutagen: {e}")
-
-            elif ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']:
-                media_type = 'video'
-                file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
-                title_for_meta, performer_for_meta = extract_title_and_artist(file_name_without_ext)
-                # Получаем продолжительность видео с помощью mutagen
-                try:
-                    video_info = MP4(actual_downloaded_path)
-                    if video_info and video_info.info.length:
-                        duration_for_meta = int(video_info.info.length)
-                except Exception as e:
-                    print(f"[URL] Ошибка чтения видео метаданных с mutagen: {e}")
-
-            elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
-                media_type = 'photo'
-            
-            # Получаем ID бота для отправки сообщения агентом
-            bot_info = await bot.get_me()
-            bot_chat_id = bot_info.id
-
-            # Запускаем агент в отдельном процессе
-            # Передаем все необходимые аргументы
-            subprocess.Popen([sys.executable, 
-                              'src/telegram_agent/agent.py',
-                              actual_downloaded_path,
-                              str(original_message.chat.id),
-                              str(status_message.message_id),
-                              str(bot_chat_id),
-                              media_type,
-                              title_for_meta if title_for_meta else '',
-                              performer_for_meta if performer_for_meta else '',
-                              str(duration_for_meta)
-                            ])
-            
-            # Удаляем файл сразу после передачи агенту, так как он его загрузит на сервер Telegram
-            try: os.remove(actual_downloaded_path)
-            except: pass
-
-            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-            return # Завершаем выполнение, агент продолжит работу
 
         # metadata
         # Since Cobalt API does not provide rich metadata, we derive it from the filename
         file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
         safe_title, performer = extract_title_and_artist(file_name_without_ext)
 
-        # send
-        await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
-        
-        ext = os.path.splitext(actual_downloaded_path)[1].lower()
-        if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
-            if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
-            await original_message.answer_audio(
-                FSInputFile(actual_downloaded_path),
-                title=safe_title,
-                performer=performer or "Unknown Artist"
-            )
-        elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
-            await original_message.answer_photo(FSInputFile(actual_downloaded_path))
-        elif ext in ['.mp4','.mkv','.webm','.mov','.avi']:
-            await original_message.answer_video(FSInputFile(actual_downloaded_path))
-        else:
-            await original_message.answer_document(FSInputFile(actual_downloaded_path))
+        # Send the file
+        size = os.path.getsize(actual_downloaded_path)
+        if size > TELETHON_THRESHOLD_MB * 1024 * 1024: # If file is larger than threshold, use Telethon agent
+            telethon_agent_used = True
+            mb = size / 1024 / 1024
+            await bot.edit_message_text(f"⏳ файл {mb:.1f}МБ слишком большой для прямой отправки, использую Telethon агента...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+
+            file_type = "document" # Default type for agent
+            if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
+                file_type = "audio"
+            elif ext in ['.mp4','.mkv','.webm','.mov','.avi']:
+                file_type = "video"
+            elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
+                file_type = "photo"
+
+            # Duration is not reliably available from Cobalt API, set to 0 for now.
+            # If needed, extract duration before calling agent for audio files.
+            duration_for_agent = 0 
+
+            # Call Telethon agent in a separate process
+            command = [
+                sys.executable, # Use the same python executable
+                "telethon_agent.py",
+                actual_downloaded_path,
+                str(original_message.chat.id),
+                str(original_message.message_id),
+                str(status_message.message_id),
+                file_type,
+                safe_title,
+                performer or "Unknown Artist",
+                str(duration_for_agent)
+            ]
+            print(f"[AGENT] Calling Telethon agent: {' '.join(command)}")
+            subprocess.Popen(command)
+            # Agent will handle sending the file and updating status, so we return here.
+            return
+        else: # If file is within limits, send directly
+            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             
+            ext = os.path.splitext(actual_downloaded_path)[1].lower()
+            if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
+                if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
+                await original_message.answer_audio(
+                    FSInputFile(actual_downloaded_path),
+                    title=safe_title,
+                    performer=performer or "Unknown Artist"
+                )
+            elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
+                await original_message.answer_photo(FSInputFile(actual_downloaded_path))
+            elif ext in ['.mp4','.mkv','.webm','.mov','.ov']:
+                await original_message.answer_video(FSInputFile(actual_downloaded_path))
+            else:
+                await original_message.answer_document(FSInputFile(actual_downloaded_path))
 
     except Exception as e:
         print(f"[URL] ERROR: {e}")
@@ -437,5 +371,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
 
     finally:
         if actual_downloaded_path and os.path.exists(actual_downloaded_path):
-            try: os.remove(actual_downloaded_path)
-            except: pass
+            if not telethon_agent_used: # Only remove if not passed to agent
+                try: os.remove(actual_downloaded_path)
+                except: pass
