@@ -308,6 +308,9 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
         safe_title, performer = extract_title_and_artist(file_name_without_ext)
 
+        # Determine file extension (needed for both direct send and Telethon agent)
+        ext = os.path.splitext(actual_downloaded_path)[1].lower()
+
         # Send the file
         size = os.path.getsize(actual_downloaded_path)
         if size > TELETHON_THRESHOLD_MB * 1024 * 1024: # If file is larger than threshold, use Telethon agent
@@ -347,7 +350,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         else: # If file is within limits, send directly
             await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             
-            ext = os.path.splitext(actual_downloaded_path)[1].lower()
             if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
                 if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
                 await original_message.answer_audio(
