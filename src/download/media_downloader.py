@@ -5,6 +5,18 @@ import asyncio
 import traceback
 import logging
 import re
+import subprocess
+import json
+import sys
+from mutagen.mp3 import MP3
+from mutagen.id3 import ID3NoHeaderError
+from mutagen.mp4 import MP4
+from mutagen.ogg import OggFile
+from mutagen.flac import FLAC
+from mutagen.wavpack import WavPack
+from mutagen.aiff import AIFF
+from mutagen.asf import ASF
+from mutagen.trueaudio import TrueAudio
 
 import yt_dlp # NEW
 from aiogram import types
@@ -307,6 +319,90 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         #         actual_downloaded_path = p; break
         if not actual_downloaded_path:
             raise Exception(f"не удалось скачать файл с помощью Cobalt API для {url}")
+
+        # Определяем размер файла
+        size = os.path.getsize(actual_downloaded_path)
+        
+        # Порог для больших файлов (Telegram Bot API limit is 50MB, so we set a bit lower)
+        LARGE_FILE_THRESHOLD = 48 * 1024 * 1024 # 48 MB
+
+        # Если файл слишком большой, используем Telethon агент
+        if size > LARGE_FILE_THRESHOLD:
+            print(f"[URL] Файл слишком большой ({size / (1024*1024):.2f} MB), использую Telethon агент...")
+            await bot.edit_message_text("⏳ файл слишком большой, отправляю через агента...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+
+            # Определение типа медиа и метаданных для агента
+            ext = os.path.splitext(actual_downloaded_path)[1].lower()
+            media_type = 'document'
+            title_for_meta = None
+            performer_for_meta = None
+            duration_for_meta = 0
+
+            if ext in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac']:
+                media_type = 'audio'
+                file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
+                title_for_meta, performer_for_meta = extract_title_and_artist(file_name_without_ext)
+                # Получаем продолжительность аудио с помощью mutagen
+                try:
+                    audio_info = None
+                    if ext == '.mp3': audio_info = MP3(actual_downloaded_path)
+                    elif ext == '.m4a': audio_info = MP4(actual_downloaded_path)
+                    elif ext == '.ogg' or ext == '.opus': audio_info = OggFile(actual_downloaded_path)
+                    elif ext == '.flac': audio_info = FLAC(actual_downloaded_path)
+                    elif ext == '.wav': audio_info = WavPack(actual_downloaded_path) # WavPack for .wav (or use wave module directly)
+                    elif ext == '.aiff': audio_info = AIFF(actual_downloaded_path)
+                    elif ext == '.wma' or ext == '.wmv': audio_info = ASF(actual_downloaded_path)
+                    elif ext == '.tta': audio_info = TrueAudio(actual_downloaded_path)
+
+                    if audio_info and audio_info.info.length:
+                        duration_for_meta = int(audio_info.info.length)
+                        # Если title/performer не были извлечены из имени файла, попробуем из метаданных
+                        if not title_for_meta and hasattr(audio_info.tags, 'title'): title_for_meta = str(audio_info.tags['title'][0])
+                        if not performer_for_meta and hasattr(audio_info.tags, 'artist'): performer_for_meta = str(audio_info.tags['artist'][0])
+                except ID3NoHeaderError: # Для MP3 без ID3 тегов
+                    pass
+                except Exception as e:
+                    print(f"[URL] Ошибка чтения аудио метаданных с mutagen: {e}")
+
+            elif ext in ['.mp4', '.mkv', '.webm', '.mov', '.avi']:
+                media_type = 'video'
+                file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
+                title_for_meta, performer_for_meta = extract_title_and_artist(file_name_without_ext)
+                # Получаем продолжительность видео с помощью mutagen
+                try:
+                    video_info = MP4(actual_downloaded_path)
+                    if video_info and video_info.info.length:
+                        duration_for_meta = int(video_info.info.length)
+                except Exception as e:
+                    print(f"[URL] Ошибка чтения видео метаданных с mutagen: {e}")
+
+            elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']:
+                media_type = 'photo'
+            
+            # Получаем ID бота для отправки сообщения агентом
+            bot_info = await bot.get_me()
+            bot_chat_id = bot_info.id
+
+            # Запускаем агент в отдельном процессе
+            # Передаем все необходимые аргументы
+            subprocess.Popen([sys.executable, 
+                              'src/telegram_agent/agent.py',
+                              actual_downloaded_path,
+                              str(original_message.chat.id),
+                              str(status_message.message_id),
+                              str(bot_chat_id),
+                              media_type,
+                              title_for_meta if title_for_meta else '',
+                              performer_for_meta if performer_for_meta else '',
+                              str(duration_for_meta)
+                            ])
+            
+            # Удаляем файл сразу после передачи агенту, так как он его загрузит на сервер Telegram
+            try: os.remove(actual_downloaded_path)
+            except: pass
+
+            await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
+            return # Завершаем выполнение, агент продолжит работу
 
         # metadata
         # Since Cobalt API does not provide rich metadata, we derive it from the filename

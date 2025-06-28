@@ -28,6 +28,9 @@ from src.logger.group_logger import send_log_message
 
 logger = logging.getLogger(__name__)
 
+# Переменная для хранения ID бота, будет инициализирована при первом получении
+BOT_USER_ID = None
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     # Notify admin about start action
@@ -227,6 +230,93 @@ async def process_page_callback(callback: types.CallbackQuery):
 @dp.callback_query(F.data=="info")
 async def process_info_callback(callback: types.CallbackQuery):
     await callback.answer()
+
+@dp.message(F.from_user.id == F.bot.id, F.caption.regexp(r'^{', re.DOTALL))
+async def handle_agent_message(message: types.Message):
+    global BOT_USER_ID
+    if BOT_USER_ID is None:
+        bot_info = await bot.get_me()
+        BOT_USER_ID = bot_info.id
+    
+    # Проверяем, что сообщение действительно от нашего бота (т.е. от агента, отправленного боту)
+    if message.from_user.id != BOT_USER_ID:
+        return # Это не сообщение от агента
+
+    try:
+        # Парсим метаданные из caption
+        caption_data = json.loads(message.caption)
+        original_chat_id = caption_data.get('user_chat_id')
+        status_message_id = caption_data.get('status_message_id')
+        media_type = caption_data.get('media_type')
+        title = caption_data.get('title')
+        performer = caption_data.get('performer')
+        duration = caption_data.get('duration')
+
+        file_id = None
+        if message.audio:
+            file_id = message.audio.file_id
+        elif message.video:
+            file_id = message.video.file_id
+        elif message.photo:
+            file_id = message.photo[-1].file_id # Берем последнее (самое большое) фото
+        elif message.document:
+            file_id = message.document.file_id
+        
+        if not file_id or not original_chat_id or not status_message_id or not media_type:
+            print(f"[AGENT_HANDLER] Неполные данные в сообщении от агента: {message.caption}")
+            return
+
+        # Удаляем статусное сообщение в чате пользователя
+        try:
+            await bot.delete_message(chat_id=original_chat_id, message_id=status_message_id)
+        except Exception as e:
+            print(f"[AGENT_HANDLER] Не удалось удалить статусное сообщение {status_message_id} в чате {original_chat_id}: {e}")
+        
+        # Пересылаем файл пользователю
+        if media_type == 'audio':
+            await bot.send_audio(
+                original_chat_id, 
+                file_id, 
+                title=title, 
+                performer=performer, 
+                duration=duration
+            )
+        elif media_type == 'video':
+            await bot.send_video(
+                original_chat_id, 
+                file_id, 
+                caption=title, # Используем title как caption для видео
+                duration=duration
+            )
+        elif media_type == 'photo':
+            await bot.send_photo(
+                original_chat_id, 
+                file_id, 
+                caption=title # Используем title как caption для фото
+            )
+        else: # document
+            await bot.send_document(
+                original_chat_id, 
+                file_id, 
+                caption=title # Используем title как caption для документа
+            )
+        
+        # Удаляем сообщение, которое агент отправил боту, для очистки чата бота
+        try:
+            await message.delete()
+        except Exception as e:
+            print(f"[AGENT_HANDLER] Не удалось удалить сообщение агента {message.message_id}: {e}")
+
+    except json.JSONDecodeError:
+        print(f"[AGENT_HANDLER] Caption не является JSON: {message.caption}")
+        # Это может быть обычное сообщение, не от агента. Проигнорируем.
+        pass
+    except Exception as e:
+        print(f"[AGENT_HANDLER] Общая ошибка в обработчике агента: {e}")
+        # Отправляем сообщение об ошибке пользователю, если возможно
+        try:
+            await bot.send_message(original_chat_id, f"❌ ошибка при пересылке файла: {e}")
+        except: pass
 
 @dp.message((F.voice | F.audio | F.video_note))
 async def handle_media_recognition(message: types.Message):

@@ -1,1 +1,0 @@
-web: python -c "print('Nixpacks satisfied.')" 
