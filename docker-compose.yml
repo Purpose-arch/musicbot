@@ -22,6 +22,7 @@ services:
     build:
       context: .
       dockerfile: bot.Dockerfile
+    command: python -m src.core.main
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       TELEGRAM_API_URL: "http://telegram-bot-api-server:8080"
