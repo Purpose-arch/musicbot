@@ -316,7 +316,7 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         if size > TELETHON_THRESHOLD_MB * 1024 * 1024: # If file is larger than threshold, use Telethon agent
             telethon_agent_used = True
             mb = size / 1024 / 1024
-            await bot.edit_message_text(f"⏳ файл {mb:.1f}МБ слишком большой для прямой отправки, использую Telethon агента...", chat_id=status_message.chat.id, message_id=status_message.message_id)
+            await bot.edit_message_text(f"⏳ файл слишком большой ({mb:.1f}МБ), отправка чуть задержится...", chat_id=status_message.chat.id, message_id=status_message.message_id)
 
             file_type = "document" # Default type for agent
             if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
