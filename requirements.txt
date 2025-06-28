@@ -1,7 +1,7 @@
 discord.py
-python-dotenv
+python-dotenv==1.0.0
 requests
-aiogram==3.19.0
+aiogram==3.10.0
 vkpymusic
 mutagen
 httpx
@@ -14,3 +14,13 @@ musicxmatch-api
 lyricsgenius
 yandex-music
 deepgram-sdk
+dotenv-values==0.0.1
+ytdlp-py==0.0.15
+asyncio
+asyncio-run-in-executor
+ffmpeg
+vk_api==11.0.0
+vk_api.models==11.0.0
+vk_api.api==11.0.0
+# DEPRECATED: python-telegram-bot
+# DEPRECATED: telethon

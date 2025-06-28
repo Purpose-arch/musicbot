@@ -1,2 +1,0 @@
-[start]
-cmd = "python -c \"print('Nixpacks satisfied at root. Railway will now use docker-compose.yml')\"" 
