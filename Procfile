@@ -1,1 +1,1 @@
-web: docker-compose up --build 
+web: python -c "print('Nixpacks satisfied.')" 
