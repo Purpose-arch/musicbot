@@ -5,6 +5,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 from aiogram import Bot, Dispatcher
 from src.core.config import BOT_TOKEN
 
+TELEGRAM_API_URL = os.getenv('TELEGRAM_API_URL')
+
 # Initialize bot and dispatcher
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, base_url=TELEGRAM_API_URL)
 dp = Dispatcher() 

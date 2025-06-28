@@ -308,12 +308,6 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         if not actual_downloaded_path:
             raise Exception(f"не удалось скачать файл с помощью Cobalt API для {url}")
 
-        # size check
-        size = os.path.getsize(actual_downloaded_path)
-        if size > 50*1024*1024:
-            mb = size/1024/1024
-            raise Exception(f"слишком большой файл {mb:.1f}МБ (лимит 50)")
-
         # metadata
         # Since Cobalt API does not provide rich metadata, we derive it from the filename
         file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
