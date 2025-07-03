@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def main():
+    await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Starting bot in polling mode...")
     await dp.start_polling(bot)
 
