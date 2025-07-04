@@ -549,6 +549,7 @@ async def handle_telethon_agent_file(message: types.Message):
                             chat_id=original_chat_id,
                             video=file_id,
                             caption=title, # Video caption
+                            duration=duration, # NEW: Pass duration for video files
                             reply_to_message_id=original_message_id if original_message_id else None
                         )
                     elif file_type == "photo":

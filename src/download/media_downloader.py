@@ -367,12 +367,17 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 await original_message.answer_audio(
                     FSInputFile(actual_downloaded_path),
                     title=title_for_media,
-                    performer=performer_for_media
+                    performer=performer_for_media,
+                    duration=duration_for_media # NEW: Pass duration for directly sent audio files
                 )
             elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
                 await original_message.answer_photo(FSInputFile(actual_downloaded_path))
             elif ext in ['.mp4','.mkv','.webm','.mov','.avi']:
-                await original_message.answer_video(FSInputFile(actual_downloaded_path))
+                await original_message.answer_video(
+                    FSInputFile(actual_downloaded_path),
+                    caption=title_for_media, # Use title as caption for video
+                    duration=duration_for_media # NEW: Pass duration for directly sent video files
+                )
             else:
                 await original_message.answer_document(FSInputFile(actual_downloaded_path))
 
