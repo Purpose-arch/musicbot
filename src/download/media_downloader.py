@@ -12,7 +12,7 @@ import yt_dlp # NEW
 from aiogram import types
 from aiogram.types import FSInputFile
 # DEPRECATED: from mutagen.ogg import OggFile # This import is causing ImportError and is not used
-from mutagen import File # NEW
+# DEPRECATED: from mutagen import File # No longer needed as metadata extracted from yt-dlp
 
 from src.core.bot_instance import bot
 from src.core.config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
@@ -304,10 +304,21 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         if not actual_downloaded_path:
             raise Exception(f"не удалось скачать файл с помощью Cobalt API для {url}")
 
-        # metadata
-        # Since Cobalt API does not provide rich metadata, we derive it from the filename
-        file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
-        safe_title, performer = extract_title_and_artist(file_name_without_ext)
+        # metadata: prioritize yt-dlp extracted_info
+        title_for_media = extracted_info.get('title') if extracted_info else None
+        performer_for_media = extracted_info.get('artist') or extracted_info.get('uploader') if extracted_info else None
+        duration_for_media = extracted_info.get('duration', 0) if extracted_info else 0
+
+        # Fallback to filename if yt-dlp metadata is missing
+        if not title_for_media or not performer_for_media:
+            file_name_without_ext = os.path.splitext(os.path.basename(actual_downloaded_path))[0]
+            safe_title, performer_from_filename = extract_title_and_artist(file_name_without_ext)
+            if not title_for_media: title_for_media = safe_title
+            if not performer_for_media: performer_for_media = performer_from_filename
+        
+        # Ensure we have a title and performer
+        title_for_media = title_for_media or "Unknown Title"
+        performer_for_media = performer_for_media or "Unknown Artist"
 
         # Determine file extension (needed for both direct send and Telethon agent)
         ext = os.path.splitext(actual_downloaded_path)[1].lower()
@@ -327,17 +338,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
             elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
                 file_type = "photo"
 
-            # Get duration from extracted_info if available
-            duration_for_agent = 0
-            if extracted_info and extracted_info.get('duration'):
-                duration_for_agent = extracted_info['duration']
-            elif ext in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac'] and os.path.exists(actual_downloaded_path):
-                try:
-                    audio_file = File(actual_downloaded_path)
-                    if audio_file and audio_file.info and audio_file.info.length:
-                        duration_for_agent = int(audio_file.info.length)
-                except Exception as e:
-                    print(f"[URL] Could not get duration from mutagen for {actual_downloaded_path}: {e}")
+            # Duration is already handled by duration_for_media
+            duration_for_agent = duration_for_media
 
             # Call Telethon agent in a separate process
             command = [
@@ -348,8 +350,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 str(original_message.message_id),
                 str(status_message.message_id),
                 file_type,
-                safe_title,
-                performer or "Unknown Artist",
+                title_for_media,
+                performer_for_media,
                 str(duration_for_agent)
             ]
             print(f"[AGENT] Calling Telethon agent: {' '.join(command)}")
@@ -359,12 +361,13 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
         else: # If file is within limits, send directly
             await bot.delete_message(chat_id=status_message.chat.id, message_id=status_message.message_id)
             
+            # ext is already defined above
             if ext in ['.mp3','.m4a','.ogg','.opus','.aac','.wav','.flac']:
-                if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, safe_title, performer or "Unknown")
+                if ext == '.mp3': set_mp3_metadata(actual_downloaded_path, title_for_media, performer_for_media)
                 await original_message.answer_audio(
                     FSInputFile(actual_downloaded_path),
-                    title=safe_title,
-                    performer=performer or "Unknown Artist"
+                    title=title_for_media,
+                    performer=performer_for_media
                 )
             elif ext in ['.jpg','.jpeg','.png','.gif','.webp']:
                 await original_message.answer_photo(FSInputFile(actual_downloaded_path))
