@@ -12,6 +12,7 @@ import yt_dlp # NEW
 from aiogram import types
 from aiogram.types import FSInputFile
 # DEPRECATED: from mutagen.ogg import OggFile # This import is causing ImportError and is not used
+from mutagen import File # NEW
 
 from src.core.bot_instance import bot
 from src.core.config import MAX_TRACKS, GROUP_MAX_TRACKS, MAX_PARALLEL_DOWNLOADS
@@ -327,7 +328,16 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 file_type = "photo"
 
             # Get duration from extracted_info if available
-            duration_for_agent = extracted_info.get('duration', 0) if extracted_info else 0
+            duration_for_agent = 0
+            if extracted_info and extracted_info.get('duration'):
+                duration_for_agent = extracted_info['duration']
+            elif ext in ['.mp3', '.m4a', '.ogg', '.opus', '.aac', '.wav', '.flac'] and os.path.exists(actual_downloaded_path):
+                try:
+                    audio_file = File(actual_downloaded_path)
+                    if audio_file and audio_file.info and audio_file.info.length:
+                        duration_for_agent = int(audio_file.info.length)
+                except Exception as e:
+                    print(f"[URL] Could not get duration from mutagen for {actual_downloaded_path}: {e}")
 
             # Call Telethon agent in a separate process
             command = [
