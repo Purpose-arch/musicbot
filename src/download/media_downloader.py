@@ -376,7 +376,8 @@ async def download_media_from_url(url: str, original_message: types.Message, sta
                 await original_message.answer_video(
                     FSInputFile(actual_downloaded_path),
                     caption=title_for_media, # Use title as caption for video
-                    duration=duration_for_media # NEW: Pass duration for directly sent video files
+                    duration=duration_for_media, # Pass duration for directly sent video files
+                    supports_streaming=True # Allow streaming of the video file
                 )
             else:
                 await original_message.answer_document(FSInputFile(actual_downloaded_path))
